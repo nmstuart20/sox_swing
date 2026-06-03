@@ -6,13 +6,6 @@ The prompts are ordered so each builds on the last, with clean module boundaries
 
 ---
 
-## 1. Project scaffolding
-
-> Create a Python project structure for an automated trading bot that trades only SOXL and SOXS via Alpaca. Use a modular layout: `config/`, `data/` (Finnhub + Alpaca market data), `strategy/`, `execution/` (Alpaca orders), `risk/`, and `main.py`. Include `requirements.txt` (alpaca-py, finnhub-python, pandas, numpy, ta, python-dotenv), a `.env.example`, and a config loader that reads API keys and trading params. Add logging setup writing to both console and rotating file.
-
-## 2. Alpaca connection layer
-
-> Write an `execution/alpaca_client.py` wrapper around alpaca-py that: connects using paper or live keys from config, fetches account info and buying power, checks current SOXL/SOXS positions, and exposes methods to submit market, limit, and bracket orders plus options orders. Include a flag to switch between paper and live. Add retry logic and clear error handling.
 
 ## 3. Market data ingestion
 
