@@ -1,0 +1,6 @@
+alpaca-py>=0.30.0
+finnhub-python>=2.4.20
+pandas>=2.0.0
+numpy>=1.24.0
+ta>=0.11.0
+python-dotenv>=1.0.0
