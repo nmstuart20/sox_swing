@@ -6,15 +6,6 @@ The prompts are ordered so each builds on the last, with clean module boundaries
 
 ---
 
-
-## 3. Market data ingestion
-
-> Write `data/market_data.py` that pulls historical and real-time OHLCV bars for SOXL and SOXS from Alpaca (1-min, 5-min, daily). Return clean pandas DataFrames indexed by timestamp, handle gaps, and cache recent bars. Include a method to get the latest quote and current price.
-
-## 4. Finnhub news + sentiment
-
-> Write `data/finnhub_data.py` using the Finnhub API to fetch: company news for SOXL/SOXS and the underlying semiconductor sector (e.g. SMH, NVDA, AMD), news sentiment scores, and any relevant economic data. Return a normalized DataFrame with timestamp, headline, source, and a sentiment score. Add simple keyword-based sentiment fallback if Finnhub sentiment is unavailable, and rate-limit handling.
-
 ## 5. Technical indicators
 
 > Write `strategy/indicators.py` that computes technical indicators on the OHLCV DataFrames using the `ta` library: RSI, MACD, EMA(9/21/50), Bollinger Bands, ATR, and VWAP. Add functions that return current values plus boolean signal flags (e.g. RSI oversold, MACD bullish cross, price above/below key EMA).
