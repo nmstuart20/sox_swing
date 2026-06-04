@@ -20,7 +20,7 @@ from typing import Any, Callable, TypeVar
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.models import Order, Position, TradeAccount
+from alpaca.trading.models import Clock, Order, Position, TradeAccount
 from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
@@ -141,6 +141,18 @@ class AlpacaClient:
         """Return total account equity."""
         account = self.get_account()
         return float(account.equity)
+
+    @_with_retry()
+    def get_clock(self) -> Clock:
+        """Return Alpaca's market clock (``is_open``, ``next_open``, ``next_close``).
+
+        The orchestration loop uses this as the single source of truth for
+        market hours so it never trades — or holds into close — outside session.
+        """
+        return self._client.get_clock()
+
+    def is_market_open(self) -> bool:
+        return bool(self.get_clock().is_open)
 
     @_with_retry()
     def get_all_positions(self) -> list[Position]:

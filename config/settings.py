@@ -86,6 +86,7 @@ class EngineConfig:
     poll_interval_seconds: int
     close_at_eod: bool
     use_options: bool
+    eod_flat_buffer_minutes: int
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
             close_at_eod=_get_bool("CLOSE_AT_EOD", True),
             use_options=_get_bool("USE_OPTIONS", False),
+            eod_flat_buffer_minutes=_get_int("EOD_FLAT_BUFFER_MINUTES", 15),
         ),
         logging=LoggingConfig(
             level=_get_str("LOG_LEVEL", "INFO").upper(),
@@ -186,3 +188,5 @@ def _validate(settings: Settings) -> None:
         raise ValueError("MAX_TRADES_PER_DAY must be >= 1.")
     if settings.engine.poll_interval_seconds < 1:
         raise ValueError("POLL_INTERVAL_SECONDS must be >= 1.")
+    if settings.engine.eod_flat_buffer_minutes < 0:
+        raise ValueError("EOD_FLAT_BUFFER_MINUTES must be >= 0.")
