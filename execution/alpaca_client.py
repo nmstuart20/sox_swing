@@ -270,6 +270,52 @@ class AlpacaClient:
         )
         return self._client.submit_order(request)
 
+    @_with_retry()
+    def submit_stop_entry_order(
+        self,
+        symbol: str,
+        qty: float,
+        side: OrderSide,
+        stop_loss_price: float,
+        stop_limit_price: float | None = None,
+        limit_price: float | None = None,
+        time_in_force: TimeInForce = TimeInForce.DAY,
+        client_order_id: str | None = None,
+    ) -> Order:
+        """Submit a one-triggers-other entry: an entry with an attached stop,
+        but *no* take-profit leg.
+
+        Unlike a bracket there is no resting take-profit limit on the sell side,
+        so profit-taking is left to the orchestration loop as a market close.
+        The entry is a market order unless ``limit_price`` is given; the stop is
+        a plain stop (market on trigger) unless ``stop_limit_price`` makes it a
+        stop-limit.
+        """
+        stop_loss = StopLossRequest(
+            stop_price=round(float(stop_loss_price), 2),
+            limit_price=round(float(stop_limit_price), 2) if stop_limit_price else None,
+        )
+        common = dict(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            time_in_force=time_in_force,
+            order_class=OrderClass.OTO,
+            stop_loss=stop_loss,
+            client_order_id=client_order_id,
+        )
+        if limit_price is not None:
+            request: MarketOrderRequest | LimitOrderRequest = LimitOrderRequest(
+                limit_price=round(float(limit_price), 2), **common
+            )
+        else:
+            request = MarketOrderRequest(**common)
+        logger.info(
+            "Submitting OTO %s %s x%s (sl=%.2f, no take-profit)",
+            side.value, symbol, qty, stop_loss_price,
+        )
+        return self._client.submit_order(request)
+
     # ------------------------------------------------------------------
     # Orders — options (single leg)
     # ------------------------------------------------------------------

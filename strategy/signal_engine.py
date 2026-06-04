@@ -56,7 +56,7 @@ class SignalParams:
     """
 
     # Minimum |combined score| required to take a side; below this -> NEUTRAL.
-    entry_threshold: float = 0.15
+    entry_threshold: float = 0.08
 
     # Per-signal technical weights (relative; only their ratios matter).
     w_ema_stack: float = 1.0          # fast > mid > slow (or inverse)

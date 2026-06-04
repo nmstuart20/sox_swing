@@ -317,6 +317,24 @@ class FakeAlpacaClient:
         self.submitted.append(order)
         return order
 
+    def submit_stop_entry_order(
+        self,
+        symbol: str,
+        qty: float,
+        side,
+        stop_loss_price: float,
+        client_order_id: str | None = None,
+        **_: object,
+    ) -> FakeOrder:
+        side_value = getattr(side, "value", str(side))
+        order = FakeOrder(symbol, qty, side_value, self.last_price)
+        order.client_order_id = client_order_id
+        # Paper fill opens the position immediately.
+        self.set_position(symbol, qty)
+        self.orders[order.id] = order
+        self.submitted.append(order)
+        return order
+
     def close_position(self, symbol: str) -> FakeOrder | None:
         pos = self._positions.get(symbol)
         if pos is None:
