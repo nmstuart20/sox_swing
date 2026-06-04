@@ -262,6 +262,7 @@ class FakeAlpacaClient:
         self.submitted: list[FakeOrder] = []
         self.clock = FakeClock(is_open=True)
         self.cancel_all_calls = 0
+        self.symbol_cancel_calls: dict[str, int] = {}
         self.last_price = 20.0
 
     # --- account / clock ---
@@ -347,6 +348,13 @@ class FakeAlpacaClient:
 
     def get_order(self, order_id: str) -> FakeOrder:
         return self.orders[order_id]
+
+    def get_open_orders(self, symbol: str) -> list[FakeOrder]:
+        return []
+
+    def cancel_orders_for_symbol(self, symbol: str) -> int:
+        self.symbol_cancel_calls[symbol] = self.symbol_cancel_calls.get(symbol, 0) + 1
+        return 0
 
     def cancel_all_orders(self) -> None:
         self.cancel_all_calls += 1

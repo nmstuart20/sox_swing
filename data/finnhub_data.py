@@ -46,7 +46,7 @@ NEWS_COLUMNS = ["timestamp", "symbol", "headline", "source", "url", "summary", "
 
 # Default semiconductor-sector tickers to pull news for alongside SOXL/SOXS.
 # SMH is the sector ETF SOXL/SOXS track; NVDA/AMD are the heaviest movers.
-DEFAULT_SECTOR_SYMBOLS = ("SMH", "NVDA", "AMD", "TSM", "AVGO")
+DEFAULT_SECTOR_SYMBOLS = ("SMH", "NVDA", "AMD", "TSM", "AVGO", "INTC", "TXN", "MU", "MRVL", "CDNS", "AMAT", "QCOM", "AMD", "LRCX", "KLAC", "ASML")
 
 # Finnhub's free tier allows 60 API calls per minute; a 1.05s floor between
 # calls keeps us comfortably under it without external coordination.

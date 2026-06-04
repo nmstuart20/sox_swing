@@ -314,7 +314,15 @@ class OrderManager:
         return managed
 
     def _close_symbol(self, symbol: str, *, reason: str) -> ManagedOrder | None:
-        """Liquidate the whole position in ``symbol`` at market and track it."""
+        """Liquidate the whole position in ``symbol`` at market and track it.
+
+        Cancels any resting orders on the symbol first — once a bracket entry
+        fills, its stop-loss/take-profit children become open sell orders that
+        *hold* the position's shares, and Alpaca rejects a liquidation while
+        they're live ("insufficient qty available"). Clearing them frees the
+        shares so the close can go through.
+        """
+        self._client.cancel_orders_for_symbol(symbol)
         order = self._client.close_position(symbol)
         if order is None:
             logger.info("Nothing to close in %s (already flat)", symbol)
@@ -349,10 +357,9 @@ class OrderManager:
     def close_all(self, *, reason: str = "flatten requested") -> list[ManagedOrder]:
         """Close both legs of the pair (e.g. for end-of-day flat).
 
-        Cancels resting child orders first so the liquidation isn't fought by a
-        stale stop leg, then market-closes each open symbol.
+        Each :meth:`_close_symbol` cancels that symbol's resting child orders
+        before liquidating, so a stale stop leg never fights the close.
         """
-        self._client.cancel_all_orders()
         orders: list[ManagedOrder] = []
         for symbol in self._symbols:
             order = self._close_symbol(symbol, reason=reason)

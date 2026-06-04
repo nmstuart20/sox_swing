@@ -343,6 +343,12 @@ class SimBroker:
         # orders to cancel; the bracket legs live on the position, not as orders.
         return None
 
+    def cancel_orders_for_symbol(self, symbol: str) -> int:
+        # As with cancel_all_orders: bracket legs live on the position here, so
+        # there are no resting orders to clear before a close. No-op for parity
+        # with the live AlpacaClient interface.
+        return 0
+
     def submit_bracket_order(
         self,
         symbol: str,

@@ -19,9 +19,10 @@ from functools import wraps
 from typing import Any, Callable, TypeVar
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.models import Clock, Order, Position, TradeAccount
 from alpaca.trading.requests import (
+    GetOrdersRequest,
     LimitOrderRequest,
     MarketOrderRequest,
     StopLossRequest,
@@ -364,6 +365,39 @@ class AlpacaClient:
     @_with_retry()
     def get_order(self, order_id: str) -> Order:
         return self._client.get_order_by_id(order_id)
+
+    @_with_retry()
+    def get_open_orders(self, symbol: str) -> list[Order]:
+        """Return the currently open (non-terminal) orders for ``symbol``.
+
+        Includes the resting take-profit/stop-loss children of a bracket once
+        the entry has filled. These hold the position's shares, so they must be
+        cancelled before the position can be liquidated.
+        """
+        request = GetOrdersRequest(
+            status=QueryOrderStatus.OPEN,
+            symbols=[symbol],
+            nested=False,  # flat list: each resting leg is its own cancellable order
+        )
+        return list(self._client.get_orders(filter=request))
+
+    def cancel_orders_for_symbol(self, symbol: str) -> int:
+        """Cancel every open order on ``symbol`` (incl. resting bracket legs).
+
+        Returns the number of orders cancelled. Best-effort: a leg that has
+        already gone terminal (e.g. just filled) raises on cancel and is
+        skipped rather than aborting the sweep.
+        """
+        cancelled = 0
+        for order in self.get_open_orders(symbol):
+            try:
+                self.cancel_order(str(order.id))
+                cancelled += 1
+            except AlpacaClientError as exc:
+                logger.warning("Could not cancel order %s on %s: %s", order.id, symbol, exc)
+        if cancelled:
+            logger.info("Cancelled %d resting order(s) on %s before close", cancelled, symbol)
+        return cancelled
 
     @_with_retry()
     def cancel_order(self, order_id: str) -> None:
