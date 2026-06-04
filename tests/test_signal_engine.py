@@ -149,6 +149,72 @@ def test_evaluate_swallows_finnhub_errors(engine):
 
 
 # ----------------------------------------------------------------------
+# Continuous vs. ternary scoring
+# ----------------------------------------------------------------------
+def _technical_engine(**param_overrides) -> SignalEngine:
+    """A pure-technical engine (sentiment weight 0) for scoring tests."""
+    cfg = StrategyConfig(technical_weight=1.0, sentiment_weight=0.0)
+    return SignalEngine(cfg, params=SignalParams(**param_overrides))
+
+
+def test_default_params_use_continuous_scoring():
+    assert SignalParams().continuous_scoring is True
+
+
+def test_continuous_score_tracks_price_without_crossing_a_flag():
+    """The core fix: the score glides as price moves, not only at crossings.
+
+    Both snapshots stay above every EMA/VWAP (identical boolean flags), so the
+    legacy ternary scorer would give them the *same* score. With continuous
+    scoring the one sitting further above scores more bullish.
+    """
+    eng = _technical_engine()  # continuous by default
+    far = make_snapshot(
+        close=21.0, atr=0.5,
+        price_above_ema_slow=True, price_above_ema_mid=True,
+        price_above_ema_fast=True, price_above_vwap=True,
+    )
+    near = make_snapshot(
+        close=20.2, atr=0.5,
+        price_above_ema_slow=True, price_above_ema_mid=True,
+        price_above_ema_fast=True, price_above_vwap=True,
+    )
+    score_far = eng.generate(far).technical_score
+    score_near = eng.generate(near).technical_score
+    assert score_far > score_near > 0
+
+
+def test_binary_scoring_is_opt_in_and_stepwise():
+    """With continuous_scoring=False the same two prices score identically."""
+    eng = _technical_engine(continuous_scoring=False)
+    far = make_snapshot(
+        close=21.0, price_above_ema_slow=True,
+        price_above_ema_mid=True, price_above_vwap=True,
+    )
+    near = make_snapshot(
+        close=20.2, price_above_ema_slow=True,
+        price_above_ema_mid=True, price_above_vwap=True,
+    )
+    assert eng.generate(far).technical_score == eng.generate(near).technical_score
+
+
+def test_continuous_rsi_leans_before_reaching_the_extremes():
+    """RSI between 30 and 70 contributes nothing in ternary mode, a lean here."""
+    eng = _technical_engine()
+    mild_bull = eng.generate(make_snapshot(rsi=40.0)).technical_score
+    mild_bear = eng.generate(make_snapshot(rsi=60.0)).technical_score
+    assert mild_bull > 0 > mild_bear
+
+    # In ternary mode RSI 40 and 60 are both inside 30..70, so neither votes and
+    # the score is identical — the very blind spot the continuous lean removes.
+    binary = _technical_engine(continuous_scoring=False)
+    assert (
+        binary.generate(make_snapshot(rsi=40.0)).technical_score
+        == binary.generate(make_snapshot(rsi=60.0)).technical_score
+    )
+
+
+# ----------------------------------------------------------------------
 # Params validation
 # ----------------------------------------------------------------------
 def test_invalid_entry_threshold_rejected():
@@ -156,3 +222,10 @@ def test_invalid_entry_threshold_rejected():
         SignalParams(entry_threshold=1.0)
     with pytest.raises(ValueError):
         SignalParams(entry_threshold=-0.1)
+
+
+def test_invalid_scale_rejected():
+    with pytest.raises(ValueError):
+        SignalParams(atr_scale=0.0)
+    with pytest.raises(ValueError):
+        SignalParams(macd_scale=-1.0)

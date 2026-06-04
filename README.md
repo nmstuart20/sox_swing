@@ -34,6 +34,43 @@ cp .env.example .env   # then fill in your API keys
 python main.py
 ```
 
+## Backtesting
+
+The `backtest/` harness replays historical Alpaca bars and Finnhub news through
+the **same** signal engine, risk manager, and order manager the live bot uses,
+so backtest and live behavior are driven by identical code. Only two seams are
+simulated:
+
+* a **simulated broker** (`backtest/broker.py`) that fills orders at market with
+  configurable **slippage** and **commission**, holds the attached OTO
+  stop-loss and triggers it intrabar (modelling gap-throughs), and marks the
+  account to market each bar; and
+* a **point-in-time news feed** (`backtest/feeds.py`) that only reveals articles
+  dated at or before the current bar — no look-ahead — so the engine's real
+  sentiment-blending path runs unchanged.
+
+The driver steps a simulated clock over the bars using the same cycle structure
+as the live loop (reconcile → forced exits → end-of-day flat → signal →
+execute), passing the simulated time explicitly so daily resets and EOD
+handling track the replayed session.
+
+```bash
+# Replay a window through the live strategy (keys read from .env):
+python -m backtest --start 2026-05-20 --end 2026-06-03
+
+# Bigger account, wider slippage, a per-share commission, write the trade log:
+python -m backtest --start 2026-05-01 --capital 250000 \
+    --slippage-bps 5 --commission-per-share 0.005 --trade-log trades.csv
+
+# Technicals only (skip the Finnhub news pull):
+python -m backtest --start 2026-05-20 --no-news
+```
+
+It reports **total return, annualized Sharpe, max drawdown, win rate** (plus
+profit factor and average win/loss), and prints a per-trade **trade log**
+(entry/exit, net P&L, return, bars held, and exit reason: stop-loss / flip /
+end-of-day / forced). `--trade-log PATH` also writes the full log to CSV.
+
 ## Tests
 
 The suite is fully offline — Alpaca and Finnhub are replaced with in-memory

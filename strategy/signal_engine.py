@@ -49,10 +49,17 @@ class Direction(Enum):
 class SignalParams:
     """Tunable thresholds and per-flag technical weights.
 
-    The technical score is a weighted average of the snapshot's boolean flags,
-    each contributing ``+w`` (bullish), ``-w`` (bearish), or ``0`` (neutral),
-    normalized to ``[-1, 1]`` by the total weight in play. Defaults emphasize
-    trend and momentum over mean-reversion, which suits trending leveraged ETFs.
+    The technical score is a weighted average of the snapshot's per-signal
+    votes, each contributing ``vote * w`` and normalized to ``[-1, 1]`` by the
+    total weight in play. Defaults emphasize trend and momentum over
+    mean-reversion, which suits trending leveraged ETFs.
+
+    Each vote is either ternary (``+1``/``0``/``-1``) or, when
+    ``continuous_scoring`` is on (the default), a smooth value in ``[-1, 1]``
+    derived from *how far* the indicator sits from its neutral point — so the
+    score tracks price continuously instead of stepping only when a flag flips.
+    The EMA stack and a fresh MACD cross stay ternary in both modes: one is an
+    ordering, the other a one-bar event, neither of which has a magnitude.
     """
 
     # Minimum |combined score| required to take a side; below this -> NEUTRAL.
@@ -68,9 +75,23 @@ class SignalParams:
     w_bollinger: float = 0.5          # close beyond a band (mean-reversion)
     w_vwap: float = 0.5               # price above/below rolling VWAP
 
+    # Scoring mode. True (default) -> smooth magnitude votes for the
+    # distance-based components (price-vs-EMA/VWAP, MACD histogram, RSI, %B);
+    # False -> the legacy ternary votes that only move on a threshold crossing.
+    continuous_scoring: bool = True
+
+    # Saturation scales for the continuous magnitude votes, in indicator units:
+    #   atr_scale  — ATRs of price-from-EMA / price-from-VWAP distance that map
+    #                to a full ±1 vote.
+    #   macd_scale — ATRs of MACD-histogram magnitude that map to a full ±1 vote.
+    atr_scale: float = 2.0
+    macd_scale: float = 1.0
+
     def __post_init__(self) -> None:
         if not 0.0 <= self.entry_threshold < 1.0:
             raise ValueError("entry_threshold must be in [0, 1).")
+        if self.atr_scale <= 0 or self.macd_scale <= 0:
+            raise ValueError("atr_scale and macd_scale must be positive.")
 
 
 @dataclass(frozen=True)
@@ -224,24 +245,57 @@ class SignalEngine:
     def _score_technical(
         self, snap: IndicatorSnapshot
     ) -> tuple[float, list[str]]:
-        """Weighted-average the snapshot's flags into a score in ``[-1, 1]``.
+        """Weighted-average the snapshot's per-signal votes into ``[-1, 1]``.
 
-        Each component votes ``+1``/``-1``/``0``; the score is the weight-
-        weighted mean of the votes, so a flat tape (all neutral) scores 0 and a
-        unanimous bullish read scores +1. Returns the score plus human-readable
-        reasons for every non-neutral contributor.
+        Each component votes in ``[-1, 1]`` (ternary, or a smooth magnitude when
+        ``continuous_scoring`` is on); the score is the weight-weighted mean, so
+        a flat tape scores 0 and a unanimous bullish read scores +1. Returns the
+        score plus human-readable reasons for every meaningfully leaning
+        contributor.
         """
         p = self._params
-        # (name, vote in {-1, 0, +1}, weight)
-        components: list[tuple[str, int, float]] = [
+        cont = p.continuous_scoring
+
+        # (name, vote in [-1, 1], weight). The EMA stack and a fresh MACD cross
+        # are inherently discrete and stay ternary in both modes; the rest carry
+        # a magnitude and switch to a smooth vote when continuous_scoring is on.
+        components: list[tuple[str, float, float]] = [
             ("EMA stack", _stack_vote(snap), p.w_ema_stack),
-            ("price vs slow EMA", _bool_vote(snap.price_above_ema_slow), p.w_price_vs_ema_slow),
-            ("price vs mid EMA", _bool_vote(snap.price_above_ema_mid), p.w_price_vs_ema_mid),
+            (
+                "price vs slow EMA",
+                _ema_dist_vote(snap, snap.ema_slow, p.atr_scale)
+                if cont else _bool_vote(snap.price_above_ema_slow),
+                p.w_price_vs_ema_slow,
+            ),
+            (
+                "price vs mid EMA",
+                _ema_dist_vote(snap, snap.ema_mid, p.atr_scale)
+                if cont else _bool_vote(snap.price_above_ema_mid),
+                p.w_price_vs_ema_mid,
+            ),
             ("MACD cross", _macd_cross_vote(snap), p.w_macd_cross),
-            ("MACD vs signal", _bool_vote(snap.macd_above_signal), p.w_macd_above),
-            ("RSI extreme", _rsi_vote(snap), p.w_rsi_extreme),
-            ("Bollinger band", _bollinger_vote(snap), p.w_bollinger),
-            ("price vs VWAP", _bool_vote(snap.price_above_vwap), p.w_vwap),
+            (
+                "MACD vs signal",
+                _macd_strength_vote(snap, p.macd_scale)
+                if cont else _bool_vote(snap.macd_above_signal),
+                p.w_macd_above,
+            ),
+            (
+                "RSI",
+                _rsi_continuous_vote(snap) if cont else _rsi_vote(snap),
+                p.w_rsi_extreme,
+            ),
+            (
+                "Bollinger",
+                _bollinger_continuous_vote(snap) if cont else _bollinger_vote(snap),
+                p.w_bollinger,
+            ),
+            (
+                "price vs VWAP",
+                _vwap_dist_vote(snap, p.atr_scale)
+                if cont else _bool_vote(snap.price_above_vwap),
+                p.w_vwap,
+            ),
         ]
 
         weighted_sum = 0.0
@@ -251,9 +305,10 @@ class SignalEngine:
             if weight <= 0:
                 continue
             total_weight += weight
-            if vote != 0:
-                weighted_sum += vote * weight
-                reasons.append(_lean_phrase(name, float(vote)))
+            weighted_sum += vote * weight
+            # Tiny continuous votes are noise; record only meaningful leans.
+            if abs(vote) >= _REASON_EPS:
+                reasons.append(_lean_phrase(name, vote))
 
         score = (weighted_sum / total_weight) if total_weight > 0 else 0.0
         if not reasons:
@@ -332,8 +387,13 @@ class SignalEngine:
         return self.generate(snapshot, score, sentiment_meta=meta)
 
 
+# Votes weaker than this are treated as noise and left out of the reasons list
+# (they still contribute their small amount to the weighted score).
+_REASON_EPS = 0.05
+
+
 # ----------------------------------------------------------------------
-# Vote helpers — each maps snapshot state to -1 / 0 / +1
+# Ternary vote helpers — each maps snapshot state to -1 / 0 / +1
 # ----------------------------------------------------------------------
 def _bool_vote(bullish: bool) -> int:
     """A two-sided boolean flag: +1 if True (bullish), -1 if False (bearish)."""
@@ -372,6 +432,49 @@ def _bollinger_vote(snap: IndicatorSnapshot) -> int:
     if snap.price_above_bb_upper:
         return -1
     return 0
+
+
+# ----------------------------------------------------------------------
+# Continuous vote helpers — each maps a magnitude to a smooth [-1, 1] vote
+# ----------------------------------------------------------------------
+def _atr_denom(snap: IndicatorSnapshot, scale: float) -> float:
+    """Saturation distance for a magnitude vote, in price terms.
+
+    ``scale`` ATRs map to a full ±1 vote. Falls back to ~1% of price when ATR
+    is missing/degenerate so the vote still scales rather than dividing by zero.
+    """
+    if snap.atr > 0:
+        return scale * snap.atr
+    return scale * max(abs(snap.close), 1e-9) * 0.01
+
+
+def _ema_dist_vote(snap: IndicatorSnapshot, ema: float, scale: float) -> float:
+    """Signed distance of price from an EMA, in ATR units, clamped to [-1, 1]."""
+    return _clamp((snap.close - ema) / _atr_denom(snap, scale), -1.0, 1.0)
+
+
+def _vwap_dist_vote(snap: IndicatorSnapshot, scale: float) -> float:
+    """Signed distance of price from rolling VWAP, in ATR units, clamped."""
+    return _clamp((snap.close - snap.vwap_roll) / _atr_denom(snap, scale), -1.0, 1.0)
+
+
+def _macd_strength_vote(snap: IndicatorSnapshot, scale: float) -> float:
+    """MACD histogram (macd - signal) normalized by ATR, clamped to [-1, 1]."""
+    return _clamp(snap.macd_diff / _atr_denom(snap, scale), -1.0, 1.0)
+
+
+def _rsi_continuous_vote(snap: IndicatorSnapshot) -> float:
+    """Mean-reversion RSI lean: +1 at RSI 30 (oversold), -1 at 70, 0 at 50.
+
+    Mirrors the ternary thresholds' sign (low RSI is bullish) but glides between
+    them instead of only firing at the extremes.
+    """
+    return _clamp((50.0 - snap.rsi) / 20.0, -1.0, 1.0)
+
+
+def _bollinger_continuous_vote(snap: IndicatorSnapshot) -> float:
+    """%B mapped to a mean-reversion lean: +1 at the lower band, -1 at the upper."""
+    return _clamp(1.0 - 2.0 * snap.bb_pband, -1.0, 1.0)
 
 
 def _lean_phrase(name: str, value: float) -> str:
