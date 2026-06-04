@@ -16,6 +16,7 @@ execution/   # Alpaca client + order/position management
 risk/        # position sizing, loss limits, signal vetoes
 monitoring/  # P&L tracking, per-cycle status summary, Discord alerts
 logs/        # rotating log files (gitignored)
+tests/       # unit + end-to-end paper-mode tests (pytest)
 main.py      # orchestration entry point
 ```
 
@@ -32,6 +33,23 @@ cp .env.example .env   # then fill in your API keys
 ```bash
 python main.py
 ```
+
+## Tests
+
+The suite is fully offline — Alpaca and Finnhub are replaced with in-memory
+fakes, so no API keys, network, or live orders are involved. `pytest` is
+included in `requirements.txt`.
+
+```bash
+pytest                        # run everything
+pytest tests/test_risk_manager.py   # a single module
+pytest -v                     # verbose, per-test output
+```
+
+It covers unit tests for the indicator calculations, signal engine, and risk
+manager, plus an end-to-end test that runs the full trading loop in paper mode
+and verifies the bot never holds SOXL and SOXS at once and never exceeds its
+risk limits.
 
 ## Monitoring & alerts
 
