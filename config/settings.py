@@ -90,6 +90,14 @@ class EngineConfig:
 
 
 @dataclass(frozen=True)
+class MonitoringConfig:
+    alerts_enabled: bool
+    discord_webhook_url: str
+    alert_min_level: str
+    bot_name: str
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     level: str
     log_dir: Path
@@ -107,6 +115,7 @@ class Settings:
     risk: RiskConfig
     strategy: StrategyConfig
     engine: EngineConfig
+    monitoring: MonitoringConfig
     logging: LoggingConfig
 
     @property
@@ -159,6 +168,12 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
             close_at_eod=_get_bool("CLOSE_AT_EOD", True),
             use_options=_get_bool("USE_OPTIONS", False),
             eod_flat_buffer_minutes=_get_int("EOD_FLAT_BUFFER_MINUTES", 15),
+        ),
+        monitoring=MonitoringConfig(
+            alerts_enabled=_get_bool("ALERTS_ENABLED", True),
+            discord_webhook_url=_get_str("DISCORD_WEBHOOK_URL", ""),
+            alert_min_level=_get_str("ALERT_MIN_LEVEL", "INFO").upper(),
+            bot_name=_get_str("BOT_NAME", "trade_bot"),
         ),
         logging=LoggingConfig(
             level=_get_str("LOG_LEVEL", "INFO").upper(),

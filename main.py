@@ -42,6 +42,8 @@ from data.finnhub_data import FinnhubData
 from data.market_data import MarketData, MarketDataError, Timeframe
 from execution.alpaca_client import AlpacaClient, AlpacaClientError
 from execution.order_manager import OrderManager
+from monitoring.alerts import AlertLevel, DiscordNotifier
+from monitoring.monitor import Monitor
 from risk.risk_manager import RiskManager
 from strategy.indicators import IndicatorError, IndicatorParams, IndicatorSnapshot, latest_snapshot
 from strategy.signal_engine import SignalEngine, TradeSignal
@@ -65,6 +67,7 @@ class TradingEngine:
         signal_engine: blends technicals + sentiment into a decision.
         risk_manager: the policy gate that sizes positions and sets brackets.
         order_manager: turns approved decisions into bracket orders.
+        monitor: observability layer (logs, P&L tracking, alerts).
         indicator_params: tunables for the indicator set.
     """
 
@@ -77,6 +80,7 @@ class TradingEngine:
         signal_engine: SignalEngine,
         risk_manager: RiskManager,
         order_manager: OrderManager,
+        monitor: Monitor,
         indicator_params: IndicatorParams | None = None,
     ) -> None:
         self._settings = settings
@@ -86,6 +90,7 @@ class TradingEngine:
         self._signals = signal_engine
         self._risk = risk_manager
         self._orders = order_manager
+        self._monitor = monitor
         self._indicator_params = indicator_params or IndicatorParams()
 
         self._symbol_long = settings.symbol_long
@@ -130,13 +135,27 @@ class TradingEngine:
                 "trading shares via the order manager instead."
             )
 
+        mode = "PAPER" if self._settings.alpaca.paper else "LIVE"
+        try:
+            self._monitor.on_start(
+                self._client.get_equity(), mode=mode, poll_interval=self._poll_interval
+            )
+        except Exception as exc:  # noqa: BLE001 - monitoring must not block startup
+            logger.warning("Monitor start failed: %s", exc)
+
         while not self._stop.is_set():
             try:
                 self._run_cycle()
             except Exception as exc:  # noqa: BLE001 - one bad cycle must not kill the bot
                 logger.exception("Cycle failed, continuing: %s", exc)
+                self._monitor.record_error("Trading cycle failed", exc)
             # Interruptible sleep: returns early the moment a stop is requested.
             self._stop.wait(self._poll_interval)
+
+        try:
+            self._monitor.on_stop(self._client.get_equity())
+        except Exception as exc:  # noqa: BLE001 - never fail on the way out
+            logger.warning("Monitor stop failed: %s", exc)
 
         logger.info("Trading loop stopped")
         return 0
@@ -146,6 +165,7 @@ class TradingEngine:
     # ------------------------------------------------------------------
     def _run_cycle(self) -> None:
         now = datetime.now(timezone.utc)
+        self._monitor.record_cycle()
         clock = self._client.get_clock()
 
         if not clock.is_open:
@@ -166,6 +186,9 @@ class TradingEngine:
         forced = self._orders.handle_forced_exits(equity)
         if forced:
             logger.warning("Forced %d exit(s) this cycle", len(forced))
+            self._monitor.record_exits(
+                forced, reason="risk-driven flatten (loss limit / invariant)", forced=True
+            )
 
         # End-of-day flat: stop opening new exposure and close out before the bell.
         if self._should_flatten_for_eod(clock, now):
@@ -174,7 +197,8 @@ class TradingEngine:
                     "Within EOD buffer (close %s) — flattening for end of day",
                     _fmt_ts(clock.next_close),
                 )
-                self._orders.close_all(reason="end-of-day flat")
+                closed = self._orders.close_all(reason="end-of-day flat")
+                self._monitor.record_exits(closed, reason="end-of-day flat")
                 self._eod_flattened = True
             self._log_status(equity)
             return
@@ -184,6 +208,7 @@ class TradingEngine:
             self._log_status(equity)
             return
 
+        self._monitor.record_signal(signal)
         if not signal.is_actionable:
             logger.info("No actionable signal: %s", signal)
             self._log_status(equity)
@@ -247,6 +272,7 @@ class TradingEngine:
             atr=target_snapshot.atr,
         )
         logger.info("Execution result: %s (%s)", result.action, result.message)
+        self._monitor.record_execution(result)
 
     # ------------------------------------------------------------------
     # End-of-day handling
@@ -273,14 +299,9 @@ class TradingEngine:
     def _log_status(self, equity: float) -> None:
         status = self._risk.status(equity)
         open_orders = len(self._orders.open_orders)
-        logger.info(
-            "Status | equity=%.2f drawdown=%.2f%% trades=%d/%d open_orders=%d",
-            float(equity),
-            status["daily_drawdown"] * 100,
-            status["trades_today"],
-            status["max_trades_per_day"],
-            open_orders,
-        )
+        # The monitor builds and logs the summary line, updates running P&L, and
+        # fires any first-time risk-limit-breach alerts.
+        self._monitor.status_summary(equity, status, open_orders)
 
 
 def _fmt_ts(value: Any) -> str:
@@ -322,6 +343,17 @@ def build_engine(settings: Settings) -> TradingEngine:
         symbol_short=settings.symbol_short,
         poll_interval=min(float(settings.engine.poll_interval_seconds), 2.0),
     )
+    notifier = DiscordNotifier(
+        settings.monitoring.discord_webhook_url,
+        enabled=settings.monitoring.alerts_enabled,
+        username=settings.monitoring.bot_name,
+        min_level=AlertLevel.from_name(settings.monitoring.alert_min_level),
+    )
+    monitor = Monitor(
+        notifier,
+        symbol_long=settings.symbol_long,
+        symbol_short=settings.symbol_short,
+    )
     return TradingEngine(
         settings,
         client,
@@ -330,6 +362,7 @@ def build_engine(settings: Settings) -> TradingEngine:
         signal_engine,
         risk_manager,
         order_manager,
+        monitor,
     )
 
 
