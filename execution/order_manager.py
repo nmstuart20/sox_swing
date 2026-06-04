@@ -3,10 +3,11 @@
 The :class:`OrderManager` is the bridge between a *decision* and a *fill*. It
 takes a :class:`~strategy.signal_engine.TradeSignal`, runs it through the
 :class:`~risk.risk_manager.RiskManager` to size the position and derive the
-ATR stop, and then — if the trade is approved — places the order through the
-:class:`~execution.alpaca_client.AlpacaClient` as an OTO entry (market buy +
-attached stop-loss, no take-profit limit). Profit-taking is a market close
-handled by the loop, not a resting sell limit.
+ATR bracket, and then — if the trade is approved — places the order through the
+:class:`~execution.alpaca_client.AlpacaClient` as a bracket entry (market buy +
+attached take-profit limit and stop-loss). Whichever bracket leg fills first
+closes the position; the loop can still close early (signal flip, forced exit,
+or end-of-day flat).
 
 It owns the messy, stateful parts the risk manager deliberately stays out of:
 
@@ -294,16 +295,18 @@ class OrderManager:
     def _open_entry(self, decision: RiskDecision) -> ManagedOrder:
         """Submit the entry for an approved decision and track it.
 
-        The entry is a market buy with an attached stop-loss (OTO) — there is no
-        resting take-profit limit, so the only sell-side order Alpaca holds is
-        the stop. Profit-taking happens as a market close driven by the
-        orchestration loop (signal flip, forced exit, or end-of-day flat).
+        The entry is a market buy with a full ATR bracket attached: a resting
+        take-profit limit and a stop-loss, as OCO children. Whichever leg fills
+        first closes the position and cancels the other, so a winner is taken at
+        the +N*ATR target without waiting on a poll. The orchestration loop can
+        still close early on a signal flip, forced exit, or end-of-day flat.
         """
         client_order_id = self._new_client_order_id("entry", decision.target_symbol or "")
-        order = self._client.submit_stop_entry_order(
+        order = self._client.submit_bracket_order(
             symbol=decision.target_symbol,  # type: ignore[arg-type]
             qty=decision.qty,
             side=OrderSide.BUY,  # both legs are entered long (we buy the favored ETF)
+            take_profit_price=decision.take_profit,
             stop_loss_price=decision.stop_loss,
             client_order_id=client_order_id,
         )

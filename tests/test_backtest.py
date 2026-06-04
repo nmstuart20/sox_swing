@@ -124,6 +124,46 @@ def test_broker_triggers_stop_on_breach():
     assert trade.bars_held == 1
 
 
+def test_broker_triggers_take_profit_on_target():
+    broker = SimBroker(initial_capital=INITIAL, cost_model=CostModel(slippage_bps=10.0))
+    ts = datetime(2026, 6, 4, 15, 0, tzinfo=timezone.utc)
+    broker.set_marks({"SOXL": 20.0})
+    broker.process_bar(ts, {"SOXL": {"open": 20, "high": 20, "low": 20, "close": 20}}, 0, _clock())
+    broker.submit_bracket_order(
+        "SOXL", 10, side="buy", take_profit_price=21.0, stop_loss_price=19.0
+    )
+
+    # Next bar's high reaches the target: filled at 21.0 (a limit fills at its
+    # price, with no adverse slippage), for a win.
+    ts2 = datetime(2026, 6, 4, 15, 5, tzinfo=timezone.utc)
+    broker.set_marks({"SOXL": 20.9})
+    broker.process_bar(ts2, {"SOXL": {"open": 20.5, "high": 21.4, "low": 20.4, "close": 20.9}}, 1, _clock())
+
+    assert not broker.has_position("SOXL")
+    trade = broker.trades[-1]
+    assert trade.exit_reason == "take-profit"
+    assert trade.exit_price == pytest.approx(21.0)  # no slippage on the limit
+    assert trade.net_pnl > 0
+
+
+def test_broker_stop_wins_when_bar_spans_both_legs():
+    # A bar whose range covers both the stop and the take-profit must resolve to
+    # the stop (the conservative, no-look-ahead assumption).
+    broker = SimBroker(initial_capital=INITIAL, cost_model=CostModel(slippage_bps=0.0))
+    ts = datetime(2026, 6, 4, 15, 0, tzinfo=timezone.utc)
+    broker.set_marks({"SOXL": 20.0})
+    broker.process_bar(ts, {"SOXL": {"open": 20, "high": 20, "low": 20, "close": 20}}, 0, _clock())
+    broker.submit_bracket_order(
+        "SOXL", 10, side="buy", take_profit_price=21.0, stop_loss_price=19.0
+    )
+
+    ts2 = datetime(2026, 6, 4, 15, 5, tzinfo=timezone.utc)
+    broker.set_marks({"SOXL": 20.0})
+    broker.process_bar(ts2, {"SOXL": {"open": 20.0, "high": 21.5, "low": 18.5, "close": 20.0}}, 1, _clock())
+
+    assert broker.trades[-1].exit_reason == "stop-loss"
+
+
 def test_broker_gap_through_stop_fills_at_open():
     broker = SimBroker(initial_capital=INITIAL, cost_model=CostModel(slippage_bps=0.0))
     ts = datetime(2026, 6, 4, 15, 0, tzinfo=timezone.utc)
@@ -212,6 +252,20 @@ def test_backtest_runs_and_respects_invariants():
     assert len(result.trades) == result.metrics.num_trades
     assert len(result.equity_curve) == len(bars["SOXL"])
     assert result.metrics.initial_equity == pytest.approx(INITIAL)
+
+
+def test_backtest_takes_profit_at_target_in_uptrend():
+    # A sustained uptrend should ride into the +3*ATR target and exit there,
+    # rather than only ever flattening at end-of-day.
+    bars = _session_bars(slope_long=0.06, slope_short=-0.02)
+    engine = build_backtest_engine(
+        _settings(max_trades=50), bars, initial_capital=INITIAL,
+        cost_model=CostModel(slippage_bps=2.0),
+    )
+    result = engine.run()
+    tp = [t for t in result.trades if t.exit_reason == "take-profit"]
+    assert tp, f"expected a take-profit exit, saw {[t.exit_reason for t in result.trades]}"
+    assert all(t.net_pnl > 0 for t in tp)
 
 
 def test_backtest_runs_with_news_sentiment():

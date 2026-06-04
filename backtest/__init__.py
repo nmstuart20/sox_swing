@@ -8,7 +8,8 @@ are driven by the same code. Only two seams are simulated:
 
   * :class:`~backtest.broker.SimBroker` — an in-memory stand-in for
     :class:`~execution.alpaca_client.AlpacaClient` that fills orders with
-    slippage and commission, holds the OTO stop-loss and triggers it intrabar,
+    slippage and commission, holds the bracket (take-profit + stop) and triggers
+    a leg intrabar,
     and marks the account to market each bar; and
   * :class:`~backtest.feeds.BacktestFinnhub` — a news/sentiment feed that only
     reveals articles dated at or before the current simulated bar (no

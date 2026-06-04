@@ -12,10 +12,13 @@ What it simulates that the production fakes don't:
   * **Fills with slippage and commission.** A market buy fills at the bar price
     nudged up by ``slippage_bps``; a sell is nudged down. Commission is charged
     per share and/or as a fraction of notional, with a per-order floor.
-  * **The OTO stop-loss.** ``submit_stop_entry_order`` carries an attached stop
-    (exactly as live). The broker remembers it and, on each subsequent bar,
-    triggers a stop exit when the bar's low pierces it — modelling gap-throughs
-    by filling at the worse of the stop and the bar open.
+  * **The bracket legs.** ``submit_bracket_order`` carries an attached
+    take-profit and stop (exactly as live). The broker remembers both and, on
+    each subsequent bar, triggers a stop exit when the bar's low pierces the
+    stop (a market fill that models gap-throughs and slippage) or a take-profit
+    exit when the bar's high reaches the target (a limit fill at the target, or
+    a gapped-up open, with no adverse slippage). If a bar spans both, the stop
+    is assumed to fire first.
   * **Mark-to-market equity.** Each bar updates the marks and records an
     ``(timestamp, equity)`` point, so drawdown and Sharpe come from the same
     curve the loop traded on.
@@ -125,7 +128,8 @@ class SimPosition:
     entry_time: datetime
     entry_commission: float
     entry_index: int            # bar index at entry, for bars-held bookkeeping
-    stop_price: float           # attached OTO stop (sell-stop below entry)
+    stop_price: float           # bracket stop (sell-stop below entry)
+    take_profit: float          # bracket target (sell-limit above entry; 0 = none)
     mark: float                 # latest close
 
     @property
@@ -262,18 +266,26 @@ class SimBroker:
         self._bar_index = bar_index
         self._clock = clock
 
-        # 1. Stops first: a position held into this bar can be stopped out by the
-        #    bar's range before any new decision is made at the close.
+        # 1. Bracket exits first: a position held into this bar can hit its stop
+        #    or take-profit before any new decision is made at the close. When a
+        #    bar's range spans both levels we can't know the intrabar path, so we
+        #    assume the worse outcome (stop) fires — the standard conservative
+        #    convention, avoiding an optimistic bias in the results.
         for symbol in list(self._positions):
             bar = ohlc.get(symbol)
             if bar is None:
                 continue
             pos = self._positions[symbol]
             if bar["low"] <= pos.stop_price:
-                # Gap-through: if the bar opened below the stop, we'd fill at the
-                # open, not the (better) stop price. Take the worse of the two.
+                # Stop is a market order: gap-through fills at the open if the bar
+                # opened below the stop (worse of the two), then slippage applies.
                 trigger = min(pos.stop_price, bar["open"])
-                self._exit(symbol, trigger, reason="stop-loss")
+                self._exit(symbol, self._costs.sell_price(trigger), reason="stop-loss")
+            elif pos.take_profit > 0 and bar["high"] >= pos.take_profit:
+                # Take-profit is a resting limit: it fills at the target, or at a
+                # gapped-up open (better), with no adverse slippage.
+                trigger = max(pos.take_profit, bar["open"])
+                self._exit(symbol, trigger, reason="take-profit")
 
         # 2. Re-mark survivors to this bar's close.
         for symbol, pos in self._positions.items():
@@ -288,7 +300,8 @@ class SimBroker:
     def force_close_all(self, reason: str = "backtest-end") -> None:
         """Liquidate every open position at its current mark (end of replay)."""
         for symbol in list(self._positions):
-            self._exit(symbol, self._positions[symbol].mark, reason=reason)
+            fill = self._costs.sell_price(self._positions[symbol].mark)
+            self._exit(symbol, fill, reason=reason)
 
     @property
     def realized_pnl(self) -> float:
@@ -327,8 +340,28 @@ class SimBroker:
 
     def cancel_all_orders(self) -> None:
         # Backtest fills are synchronous, so there are never resting child
-        # orders to cancel; the stop lives on the position, not as an order.
+        # orders to cancel; the bracket legs live on the position, not as orders.
         return None
+
+    def submit_bracket_order(
+        self,
+        symbol: str,
+        qty: float,
+        side,
+        take_profit_price: float,
+        stop_loss_price: float,
+        client_order_id: str | None = None,
+        **_: object,
+    ) -> SimOrder:
+        """Market-buy ``qty`` of ``symbol`` with an attached take-profit and stop.
+
+        Mirrors :meth:`AlpacaClient.submit_bracket_order`: the entry fills at
+        market (here, the current mark) and both bracket legs rest on the
+        position until a later bar triggers one of them (see :meth:`process_bar`).
+        """
+        return self._open(
+            symbol, qty, side, stop_loss_price, take_profit_price, client_order_id
+        )
 
     def submit_stop_entry_order(
         self,
@@ -339,12 +372,19 @@ class SimBroker:
         client_order_id: str | None = None,
         **_: object,
     ) -> SimOrder:
-        """Market-buy ``qty`` of ``symbol`` and attach an OTO stop.
+        """Market-buy with a stop only (no take-profit), like the OTO variant."""
+        return self._open(symbol, qty, side, stop_loss_price, 0.0, client_order_id)
 
-        Mirrors :meth:`AlpacaClient.submit_stop_entry_order`: the entry fills at
-        market (here, the current mark) and the stop rests on the position until
-        a later bar triggers it.
-        """
+    def _open(
+        self,
+        symbol: str,
+        qty: float,
+        side,
+        stop_loss_price: float,
+        take_profit_price: float,
+        client_order_id: str | None,
+    ) -> SimOrder:
+        """Open a long position at market and attach its bracket leg(s)."""
         side_value = getattr(side, "value", str(side))
         qty = float(qty)
         if qty <= 0:
@@ -363,12 +403,13 @@ class SimBroker:
             entry_commission=commission,
             entry_index=self._bar_index,
             stop_price=float(stop_loss_price),
+            take_profit=float(take_profit_price),
             mark=self._mark_or_raise(symbol),
         )
         order = self._make_order(symbol, side_value, qty, fill_price, client_order_id)
         logger.info(
-            "SIM entry: BUY %s x%.0f @ %.4f (stop=%.4f, comm=%.4f)",
-            symbol, qty, fill_price, stop_loss_price, commission,
+            "SIM entry: BUY %s x%.0f @ %.4f (tp=%.4f, stop=%.4f, comm=%.4f)",
+            symbol, qty, fill_price, take_profit_price, stop_loss_price, commission,
         )
         return order
 
@@ -377,18 +418,23 @@ class SimBroker:
         pos = self._positions.get(symbol)
         if pos is None:
             return None
+        # A close is a market order, so it pays slippage.
         exit_price = self._costs.sell_price(pos.mark)
-        trade = self._exit(symbol, pos.mark, reason=reason or self.default_close_reason)
-        # _exit applies slippage internally; reflect the realized fill in the order.
+        trade = self._exit(symbol, exit_price, reason=reason or self.default_close_reason)
         return self._make_order(symbol, "sell", trade.qty, exit_price, None)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-    def _exit(self, symbol: str, raw_price: float, *, reason: str) -> Trade:
-        """Close a position at ``raw_price`` (pre-slippage) and record the trade."""
+    def _exit(self, symbol: str, fill_price: float, *, reason: str) -> Trade:
+        """Close a position at ``fill_price`` (the actual fill) and record the trade.
+
+        The caller decides the fill: a stop-loss or a market close passes a
+        slippage-adjusted price, while a take-profit limit passes the target
+        price itself (a resting limit fills at its price or better, not worse).
+        """
         pos = self._positions.pop(symbol)
-        exit_price = self._costs.sell_price(raw_price)
+        exit_price = float(fill_price)
         commission = self._costs.commission(pos.qty, exit_price)
         self._cash += pos.qty * exit_price - commission
         self.total_commission += commission
