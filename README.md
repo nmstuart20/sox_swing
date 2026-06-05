@@ -58,17 +58,21 @@ on the host via a volume mount, so they survive rebuilds.
 
 ### Without compose
 
-If a host has no compose plugin, build and run the image directly. `:Z` (Podman
-on SELinux hosts) can be dropped for Docker.
+If a host has no compose plugin, build and run the image directly. The image
+runs as an unprivileged user (`appuser`, UID 10001), so the host `./logs` dir
+must be writable by that user. Podman's `:U` handles this automatically by
+chowning the mount; Docker has no equivalent, so chown the dir once instead.
+`:Z` (Podman on SELinux hosts) is a no-op elsewhere.
 
 ```bash
-# Podman
+# Podman — :U chowns ./logs to the container user (fixes "permission denied")
 podman build -t soxs-bot .
 podman run -d --name soxs-bot --restart unless-stopped \
-  --env-file .env -v ./logs:/app/logs:Z soxs-bot
+  --env-file .env -v ./logs:/app/logs:U,Z soxs-bot
 
-# Docker
+# Docker — chown the host logs dir to the container's UID once, then run
 docker build -t soxs-bot .
+mkdir -p logs && sudo chown -R 10001:10001 logs
 docker run -d --name soxs-bot --restart unless-stopped \
   --env-file .env -v "$(pwd)/logs:/app/logs" soxs-bot
 ```

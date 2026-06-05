@@ -10,9 +10,13 @@ services:
     # API keys + trading params come from .env (never baked into the image).
     env_file: .env
     # Persist rotating logs on the host so they survive container rebuilds.
-    # The :Z relabel keeps this working on SELinux hosts (Fedora/RHEL).
+    # :U makes Podman chown the host dir to the container user (appuser/10001,
+    # remapped through rootless userns) so the unprivileged process can write.
+    # :Z relabels for SELinux hosts (Fedora/RHEL) and is a no-op elsewhere.
+    # NOTE: the :U flag is Podman-only. With `docker compose`, drop it to ":Z"
+    # and instead `chown -R 10001:10001 logs` on the host once.
     volumes:
-      - ./logs:/app/logs:Z
+      - ./logs:/app/logs:U,Z
     # Restart on crash/reboot, but stay down if you stop it on purpose.
     restart: unless-stopped
     # Give the bot time to flatten positions and flush logs on SIGTERM.

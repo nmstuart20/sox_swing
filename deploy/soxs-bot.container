@@ -20,7 +20,10 @@ Wants=network-online.target
 Image=localhost/soxs-bot:latest
 # --- edit these two absolute paths for the target machine ---
 EnvironmentFile=%h/semis_bot/.env
-Volume=%h/semis_bot/logs:/app/logs:Z
+# :U makes Podman chown the host logs dir to the container user (appuser/10001,
+# remapped through rootless userns) so the unprivileged process can write to it.
+# :Z is a harmless no-op off SELinux and relabels on Fedora/RHEL.
+Volume=%h/semis_bot/logs:/app/logs:U,Z
 
 [Service]
 Restart=on-failure
