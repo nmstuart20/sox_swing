@@ -1,38 +1,80 @@
 # SOXL/SOXS Trading Bot
 
-An automated trading bot that trades **only SOXL and SOXS** (shares or options)
+An automated trading bot that trades **only SOXL and SOXS**
 using technical analysis and Finnhub news data, executing through **Alpaca**.
 
-> ⚠️ SOXL and SOXS are 3x leveraged ETFs. Run everything in Alpaca **paper mode**
-> until backtest and live behavior reconcile. Trade at your own risk.
-
-## Project layout
-
-```
-config/      # settings loader + logging setup
-data/        # Finnhub news/sentiment + Alpaca market data ingestion
-strategy/    # technical indicators + combined signal engine
-execution/   # Alpaca client + order/position management
-risk/        # position sizing, loss limits, signal vetoes
-monitoring/  # P&L tracking, per-cycle status summary, Discord alerts
-logs/        # rotating log files (gitignored)
-tests/       # unit + end-to-end paper-mode tests (pytest)
-main.py      # orchestration entry point
-```
-
-## Setup
+## Run from Machine
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then fill in your API keys
+```
+
+For development/testing, also install the test deps:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ## Run
 
 ```bash
-python main.py
+python3 main.py
 ```
+
+## Deploy with containers (Podman or Docker)
+
+First, on the target machine:
+
+```bash
+git clone <repo-url> && cd semis_bot
+cp .env.example .env        # fill in your API keys (this file stays on the host)
+```
+
+### Using compose (recommended)
+
+```bash
+# Podman
+podman compose up -d --build   # build + run detached  (or: podman-compose up -d --build)
+podman compose logs -f         # follow logs
+podman compose down            # stop (gracefully flattens positions on SIGTERM)
+
+# Docker — identical, just swap the binary
+docker compose up -d --build
+docker compose logs -f
+docker compose down
+```
+
+### Without compose
+
+If a host has no compose plugin, build and run the image directly. `:Z` (Podman
+on SELinux hosts) can be dropped for Docker.
+
+```bash
+# Podman
+podman build -t soxs-bot .
+podman run -d --name soxs-bot --restart unless-stopped \
+  --env-file .env -v ./logs:/app/logs:Z soxs-bot
+
+# Docker
+docker build -t soxs-bot .
+docker run -d --name soxs-bot --restart unless-stopped \
+  --env-file .env -v "$(pwd)/logs:/app/logs" soxs-bot
+```
+
+Manage the running container with `podman logs -f soxs-bot` /
+`docker logs -f soxs-bot` and `podman stop soxs-bot` / `docker stop soxs-bot`.
+
+Logs are written to `./logs` on the host via a volume mount, so they survive
+rebuilds. Your `.env` is gitignored and excluded from the image, so secrets
+never travel inside it — each machine keeps its own copy.
+
+### Always-on (start on boot, restart on crash)
+
+`deploy/soxs-bot.container` is a Podman **Quadlet** unit that runs the bot as a
+rootless systemd service. See the comments at the top of that file for the
+install steps (`systemctl --user start soxs-bot` + `loginctl enable-linger`).
 
 ## Backtesting
 

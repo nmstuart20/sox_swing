@@ -1,0 +1,30 @@
+# Podman Quadlet unit — runs the bot as a systemd service that starts on boot
+# and restarts on failure. This is the recommended "always-on" deployment.
+#
+# Install (rootless, per-user):
+#   1. podman build -t soxs-bot /path/to/semis_bot
+#   2. mkdir -p ~/.config/containers/systemd
+#   3. cp deploy/soxs-bot.container ~/.config/containers/systemd/
+#   4. Edit the two paths below to point at your checkout.
+#   5. systemctl --user daemon-reload && systemctl --user start soxs-bot
+#   6. loginctl enable-linger $USER   # keep it running after you log out
+#
+# Status / logs:  systemctl --user status soxs-bot
+#                 journalctl --user -u soxs-bot -f
+[Unit]
+Description=SOXL/SOXS trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/soxs-bot:latest
+# --- edit these two absolute paths for the target machine ---
+EnvironmentFile=%h/semis_bot/.env
+Volume=%h/semis_bot/logs:/app/logs:Z
+
+[Service]
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

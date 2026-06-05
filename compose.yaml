@@ -1,0 +1,19 @@
+# One-command deploy:  podman compose up -d   (or: podman-compose up -d)
+# Also compatible with `docker compose up -d`.
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: soxs-bot:latest
+    container_name: soxs-bot
+    # API keys + trading params come from .env (never baked into the image).
+    env_file: .env
+    # Persist rotating logs on the host so they survive container rebuilds.
+    # The :Z relabel keeps this working on SELinux hosts (Fedora/RHEL).
+    volumes:
+      - ./logs:/app/logs:Z
+    # Restart on crash/reboot, but stay down if you stop it on purpose.
+    restart: unless-stopped
+    # Give the bot time to flatten positions and flush logs on SIGTERM.
+    stop_grace_period: 30s

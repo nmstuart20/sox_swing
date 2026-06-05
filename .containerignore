@@ -1,0 +1,36 @@
+# Keep the build context (and image) small and free of host-only artifacts.
+# Podman reads .containerignore; `docker build` reads .dockerignore — the
+# symlink below keeps them in sync, but this file is the source of truth.
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+
+# Secrets and host state never belong in the image.
+.env
+logs
+*.log
+.cache
+*.pkl
+
+# Tooling / test caches not needed at runtime.
+.pytest_cache
+.idea
+.vscode
+.DS_Store
+
+# Container/compose files don't need to be inside the image.
+Containerfile
+Dockerfile
+.containerignore
+.dockerignore
+compose.yaml
+docker-compose.yml

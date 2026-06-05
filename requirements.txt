@@ -1,9 +1,9 @@
-alpaca-py>=0.30.0
-finnhub-python>=2.4.20
-pandas>=2.0.0
-numpy>=1.24.0
-ta>=0.11.0
-python-dotenv>=1.0.0
-
-# Testing (step 13)
-pytest>=8.0.0
+# Runtime dependencies, pinned to the versions validated in development so
+# every machine/container resolves an identical environment.
+# Test-only deps live in requirements-dev.txt.
+alpaca-py==0.43.4
+finnhub-python==2.4.28
+pandas==3.0.3
+numpy==2.4.6
+ta==0.11.0
+python-dotenv==1.2.2
