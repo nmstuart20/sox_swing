@@ -17,8 +17,23 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _strip_surrounding_quotes(value: str) -> str:
+    """Remove a matching pair of surrounding quotes from a config value.
+
+    python-dotenv strips wrapping quotes when loading a ``.env`` file, but
+    Docker/Podman's ``--env-file`` parser keeps them verbatim. Stripping a
+    matching leading/trailing quote here keeps string config (e.g. URLs)
+    consistent regardless of how the environment was populated.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
 def _get_str(key: str, default: str | None = None, *, required: bool = False) -> str:
     value = os.getenv(key, default)
+    if value is not None:
+        value = _strip_surrounding_quotes(value)
     if required and (value is None or value == "" or value.startswith("your_")):
         raise ValueError(
             f"Missing required configuration: {key}. "
