@@ -321,8 +321,14 @@ class OrderManager:
         *hold* the position's shares, and Alpaca rejects a liquidation while
         they're live ("insufficient qty available"). Clearing them frees the
         shares so the close can go through.
+
+        Cancellation is asynchronous: Alpaca leaves the child legs in
+        ``pending_cancel`` for a moment, still holding the shares. We wait for
+        them to be released before liquidating so the close doesn't race the
+        cancel and fail with a 403.
         """
         self._client.cancel_orders_for_symbol(symbol)
+        self._wait_shares_released(symbol)
         order = self._client.close_position(symbol)
         if order is None:
             logger.info("Nothing to close in %s (already flat)", symbol)
@@ -459,6 +465,32 @@ class OrderManager:
         raise AlpacaClientError(
             f"{symbol} did not go flat within {self._flip_timeout:.0f}s; "
             f"aborting to avoid holding both legs"
+        )
+
+    def _wait_shares_released(self, symbol: str) -> None:
+        """Block until ``symbol``'s shares are free of resting-order holds.
+
+        After :meth:`AlpacaClient.cancel_orders_for_symbol` the cancel is only
+        *requested* — the child legs sit in ``pending_cancel`` briefly, still
+        holding the shares (``qty_available == 0``). Liquidating in that window
+        is rejected ("insufficient qty available"), so we poll the position
+        until the held shares are released. Best-effort: on timeout we log and
+        let the close proceed (it surfaces the underlying error if still held).
+        """
+        deadline = time.monotonic() + self._flip_timeout
+        while time.monotonic() < deadline:
+            position = self._client.get_position(symbol)
+            if position is None:
+                return  # already flat — nothing to free
+            total = abs(float(position.qty))
+            available = abs(float(getattr(position, "qty_available", total) or 0.0))
+            if available >= total:
+                return  # shares freed; safe to liquidate
+            time.sleep(self._poll_interval)
+        logger.warning(
+            "%s shares still held by resting orders after %.0fs; "
+            "attempting close anyway",
+            symbol, self._flip_timeout,
         )
 
     # ------------------------------------------------------------------

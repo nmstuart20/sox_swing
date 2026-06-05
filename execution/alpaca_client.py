@@ -394,7 +394,14 @@ class AlpacaClient:
                 self.cancel_order(str(order.id))
                 cancelled += 1
             except AlpacaClientError as exc:
-                logger.warning("Could not cancel order %s on %s: %s", order.id, symbol, exc)
+                # An order already in ``pending_cancel`` (HTTP 422) is on its way
+                # out — the cancel we want is already in flight, so this is a
+                # no-op, not a failure. Count it so callers wait for the release.
+                if "pending cancel" in str(exc).lower():
+                    cancelled += 1
+                    logger.debug("Order %s on %s already pending cancel", order.id, symbol)
+                else:
+                    logger.warning("Could not cancel order %s on %s: %s", order.id, symbol, exc)
         if cancelled:
             logger.info("Cancelled %d resting order(s) on %s before close", cancelled, symbol)
         return cancelled
