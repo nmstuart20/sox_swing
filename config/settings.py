@@ -27,31 +27,45 @@ def _get_str(key: str, default: str | None = None, *, required: bool = False) ->
     return value if value is not None else ""
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Remove a trailing inline ``# comment`` from a config value.
+
+    python-dotenv strips inline comments when loading a ``.env`` file, but
+    Docker/Podman's ``--env-file`` parser does not: it passes everything after
+    ``=`` verbatim. To keep numeric/boolean config robust regardless of how the
+    environment was populated, drop anything from the first ``#`` onward. (These
+    value types can never legitimately contain ``#``.)
+    """
+    return value.split("#", 1)[0].strip()
+
+
 def _get_bool(key: str, default: bool) -> bool:
     raw = os.getenv(key)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _strip_inline_comment(raw).lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _get_float(key: str, default: float) -> float:
     raw = os.getenv(key)
-    if raw is None or raw.strip() == "":
+    if raw is None or _strip_inline_comment(raw) == "":
         return default
+    cleaned = _strip_inline_comment(raw)
     try:
-        return float(raw)
+        return float(cleaned)
     except ValueError as exc:
-        raise ValueError(f"Config {key} must be a number, got {raw!r}") from exc
+        raise ValueError(f"Config {key} must be a number, got {cleaned!r}") from exc
 
 
 def _get_int(key: str, default: int) -> int:
     raw = os.getenv(key)
-    if raw is None or raw.strip() == "":
+    if raw is None or _strip_inline_comment(raw) == "":
         return default
+    cleaned = _strip_inline_comment(raw)
     try:
-        return int(raw)
+        return int(cleaned)
     except ValueError as exc:
-        raise ValueError(f"Config {key} must be an integer, got {raw!r}") from exc
+        raise ValueError(f"Config {key} must be an integer, got {cleaned!r}") from exc
 
 
 @dataclass(frozen=True)
