@@ -1,0 +1,16 @@
+# Container / Raspberry Pi (32-bit ARM, armv7l) dependency set.
+#
+# numpy and pandas have NO prebuilt wheels for 32-bit ARM on PyPI, so a normal
+# `pip install` tries to compile them from source (the Meson build that fails on
+# a Pi). Instead the Containerfile installs these from piwheels.org, which hosts
+# prebuilt armv7l wheels — but only for the Python that ships with Raspberry Pi
+# OS (3.11 on Bookworm). These versions are chosen for solid piwheels coverage.
+#
+# The dev environment uses requirements.txt (newer numpy/pandas on Python 3.14);
+# this file exists only because cross-arch + cross-Python pins can't be identical.
+alpaca-py==0.43.4
+finnhub-python==2.4.28
+pandas==2.2.3
+numpy==1.26.4
+ta==0.11.0
+python-dotenv==1.2.2

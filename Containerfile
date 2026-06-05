@@ -4,19 +4,32 @@
 #
 # Named "Containerfile" (Podman's native default). It is a standard OCI
 # Dockerfile, so `docker build` works against it too.
-FROM python:3.14-slim
+#
+# Python 3.11 (not 3.14) so 32-bit Raspberry Pi builds can pull prebuilt
+# numpy/pandas wheels from piwheels — which only targets Raspberry Pi OS's
+# Python (3.11 on Bookworm). On x86_64/aarch64 pip still finds normal wheels.
+FROM python:3.11-slim
 
-# Fail fast, stream logs, no .pyc clutter in the image.
+# Fail fast, stream logs, no .pyc clutter in the image. PIP_EXTRA_INDEX_URL adds
+# piwheels as a fallback wheel source for 32-bit ARM (ignored on other arches,
+# which already have PyPI wheels).
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_EXTRA_INDEX_URL=https://www.piwheels.org/simple
 
 WORKDIR /app
 
+# piwheels' numpy wheels link against the system OpenBLAS rather than bundling
+# it, so install the runtime lib (no-op cost on other arches).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopenblas0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first so this layer is cached across code changes.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-pi.txt ./
+RUN pip install --no-cache-dir -r requirements-pi.txt
 
 # Application code.
 COPY . .

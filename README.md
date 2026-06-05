@@ -1,50 +1,60 @@
 # SOXL/SOXS Trading Bot
 
-An automated trading bot that trades **only SOXL and SOXS**
-using technical analysis and Finnhub news data, executing through **Alpaca**.
+An automated bot that trades **only SOXL and SOXS** through **Alpaca**, using
+technical analysis and Finnhub news sentiment.
 
-## Run from Machine
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # then fill in your API keys
-```
-
-For development/testing, also install the test deps:
-
-```bash
-pip install -r requirements.txt -r requirements-dev.txt
-```
-
-## Run
-
-```bash
-python3 main.py
-```
-
-## Deploy with containers (Podman or Docker)
-
-First, on the target machine:
+## Quick start
 
 ```bash
 git clone <repo-url> && cd semis_bot
-cp .env.example .env        # fill in your API keys (this file stays on the host)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env        # then fill in your Alpaca + Finnhub API keys + Discord webhook url
+python3 main.py
 ```
 
-### Using compose (recommended)
+## Tests
 
 ```bash
-# Podman
-podman compose up -d --build   # build + run detached  (or: podman-compose up -d --build)
-podman compose logs -f         # follow logs
-podman compose down            # stop (gracefully flattens positions on SIGTERM)
+pip install -r requirements-dev.txt    # one-time: test deps
 
-# Docker — identical, just swap the binary
-docker compose up -d --build
-docker compose logs -f
-docker compose down
+pytest                                 # run everything
+pytest -v                              # verbose, per-test output
+pytest tests/test_risk_manager.py      # a single module
 ```
+
+## Backtesting
+
+Replay historical bars and news through the same strategy the live bot uses.
+Keys are read from `.env`.
+
+```bash
+# Replay a date window:
+python -m backtest --start 2026-05-20 --end 2026-06-03
+
+# Bigger account, wider slippage, per-share commission, write the trade log:
+python -m backtest --start 2026-05-01 --capital 250000 \
+    --slippage-bps 5 --commission-per-share 0.005 --trade-log trades.csv
+
+# Technicals only (skip the Finnhub news pull):
+python -m backtest --start 2026-05-20 --no-news
+```
+
+Reports total return, annualized Sharpe, max drawdown, win rate, and a per-trade
+log. `--trade-log PATH` writes the full log to CSV.
+
+## Deploy with containers (Podman or Docker)
+
+```bash
+cp .env.example .env           # fill in your sensitive (stays on the host)
+
+podman compose up -d --build   # build + run detached
+podman compose logs -f         # follow logs
+podman compose down            # stop (flattens positions on SIGTERM)
+```
+
+Docker is identical — swap `podman` for `docker`. Logs are written to `./logs`
+on the host via a volume mount, so they survive rebuilds.
 
 ### Without compose
 
@@ -63,89 +73,25 @@ docker run -d --name soxs-bot --restart unless-stopped \
   --env-file .env -v "$(pwd)/logs:/app/logs" soxs-bot
 ```
 
-Manage the running container with `podman logs -f soxs-bot` /
-`docker logs -f soxs-bot` and `podman stop soxs-bot` / `docker stop soxs-bot`.
+Manage it with `podman logs -f soxs-bot` / `docker logs -f soxs-bot` and
+`podman stop soxs-bot` / `docker stop soxs-bot`.
 
-Logs are written to `./logs` on the host via a volume mount, so they survive
-rebuilds. Your `.env` is gitignored and excluded from the image, so secrets
-never travel inside it — each machine keeps its own copy.
-
-### Always-on (start on boot, restart on crash)
-
-`deploy/soxs-bot.container` is a Podman **Quadlet** unit that runs the bot as a
-rootless systemd service. See the comments at the top of that file for the
-install steps (`systemctl --user start soxs-bot` + `loginctl enable-linger`).
-
-## Backtesting
-
-The `backtest/` harness replays historical Alpaca bars and Finnhub news through
-the **same** signal engine, risk manager, and order manager the live bot uses,
-so backtest and live behavior are driven by identical code. Only two seams are
-simulated:
-
-* a **simulated broker** (`backtest/broker.py`) that fills orders at market with
-  configurable **slippage** and **commission**, holds the attached OTO
-  stop-loss and triggers it intrabar (modelling gap-throughs), and marks the
-  account to market each bar; and
-* a **point-in-time news feed** (`backtest/feeds.py`) that only reveals articles
-  dated at or before the current bar — no look-ahead — so the engine's real
-  sentiment-blending path runs unchanged.
-
-The driver steps a simulated clock over the bars using the same cycle structure
-as the live loop (reconcile → forced exits → end-of-day flat → signal →
-execute), passing the simulated time explicitly so daily resets and EOD
-handling track the replayed session.
-
-```bash
-# Replay a window through the live strategy (keys read from .env):
-python -m backtest --start 2026-05-20 --end 2026-06-03
-
-# Bigger account, wider slippage, a per-share commission, write the trade log:
-python -m backtest --start 2026-05-01 --capital 250000 \
-    --slippage-bps 5 --commission-per-share 0.005 --trade-log trades.csv
-
-# Technicals only (skip the Finnhub news pull):
-python -m backtest --start 2026-05-20 --no-news
-```
-
-It reports **total return, annualized Sharpe, max drawdown, win rate** (plus
-profit factor and average win/loss), and prints a per-trade **trade log**
-(entry/exit, net P&L, return, bars held, and exit reason: stop-loss / flip /
-end-of-day / forced). `--trade-log PATH` also writes the full log to CSV.
-
-## Tests
-
-The suite is fully offline — Alpaca and Finnhub are replaced with in-memory
-fakes, so no API keys, network, or live orders are involved. `pytest` is
-included in `requirements.txt`.
-
-```bash
-pytest                        # run everything
-pytest tests/test_risk_manager.py   # a single module
-pytest -v                     # verbose, per-test output
-```
-
-It covers unit tests for the indicator calculations, signal engine, and risk
-manager, plus an end-to-end test that runs the full trading loop in paper mode
-and verifies the bot never holds SOXL and SOXS at once and never exceeds its
-risk limits.
+For an always-on service that starts on boot and restarts on crash,
+`deploy/soxs-bot.container` is a Podman **Quadlet** unit; see the comments at the
+top of that file for install steps.
 
 ## Monitoring & alerts
 
-Every cycle the bot logs its decisions and trades, tracks running P&L
-(session-to-date and intraday), and prints a compact status line. It also pushes
-**Discord alerts** on entries, exits (forced / flip / end-of-day), errors, and
-risk-limit breaches.
-
-Alerts are opt-in via environment variables (all optional; defaults shown):
+The bot logs every decision and trade, tracks running P&L, and can push
+**Discord alerts** on entries, exits, errors, and risk-limit breaches. Alerts are
+opt-in via environment variables (all optional):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ALERTS_ENABLED` | `true` | Master switch for Discord alerts |
 | `DISCORD_WEBHOOK_URL` | _(empty)_ | Incoming-webhook URL; empty = alerts disabled |
-| `ALERT_MIN_LEVEL` | `INFO` | Minimum severity to send: `INFO`/`SUCCESS`/`WARNING`/`ERROR` |
+| `ALERT_MIN_LEVEL` | `INFO` | Minimum severity: `INFO`/`SUCCESS`/`WARNING`/`ERROR` |
 | `BOT_NAME` | `trade_bot` | Display name on webhook messages |
 
-Delivery is non-blocking (a background worker thread) and best-effort: a slow or
-failing webhook never stalls or crashes the trading loop. With no webhook URL the
-notifier is a silent no-op, so the bot runs fine without Discord configured.
+With no webhook URL the notifier is a silent no-op, so the bot runs fine without
+Discord configured.
