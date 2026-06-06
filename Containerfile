@@ -17,7 +17,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_EXTRA_INDEX_URL=https://www.piwheels.org/simple
+    PIP_EXTRA_INDEX_URL=https://www.piwheels.org/simple \
+    HF_HOME=/opt/huggingface
 
 WORKDIR /app
 
@@ -35,12 +36,29 @@ RUN pip install --no-cache-dir -r requirements-pi.txt
 # ARM wheels, so on armv7l we skip them on purpose and the bot falls back to
 # VADER. On every other arch (x86_64/aarch64) the install is required, so a
 # failure fails the build loudly rather than silently disabling FinBERT.
+#
+# We also pre-download the FinBERT weights into HF_HOME so the model loads
+# entirely from the image at runtime — the container is expected to run without
+# network access (e.g. backtests), and without a cache transformers would retry
+# huggingface.co for ~30s per file before falling back. The weights are chowned
+# to the runtime uid in this same layer (cheaper than a later `chown -R`, which
+# would copy up the ~450MB cache). Model id must match DEFAULT_MODEL_NAME in
+# data/finbert.py.
 RUN arch="$(uname -m)"; \
     if [ "$arch" = "armv7l" ] || [ "$arch" = "armv6l" ]; then \
         echo "32-bit ARM ($arch): skipping FinBERT extras (no torch wheels); VADER fallback"; \
     else \
-        pip install --no-cache-dir -r requirements-finbert.txt; \
+        pip install --no-cache-dir -r requirements-finbert.txt \
+        && python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; m='ProsusAI/finbert'; AutoTokenizer.from_pretrained(m); AutoModelForSequenceClassification.from_pretrained(m)" \
+        && chown -R 10001:10001 "$HF_HOME"; \
     fi
+
+# With the weights baked in above, force transformers fully offline at runtime so
+# it loads from HF_HOME and never probes huggingface.co. Set after the download
+# (which needs network). Harmless on 32-bit ARM, where transformers isn't even
+# installed and the bot uses VADER regardless.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 # Application code.
 COPY . .

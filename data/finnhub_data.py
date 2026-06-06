@@ -58,19 +58,54 @@ _DEFAULT_MIN_REQUEST_INTERVAL = 1.05
 # with no compiled dependencies, so it installs and runs even on the 32-bit ARM
 # Pi target where torch has no wheels. The analyzer carries a ~7k-word lexicon
 # loaded from disk, so we build it once, lazily, and reuse it.
+#
+# VADER's stock lexicon is tuned for social-media text, so it misses or
+# mis-scores finance jargon ("beat", "downgrade", "bullish", "glut", ...). We
+# boost it with the finance terms the old keyword lexicon recognized, scored on
+# VADER's valence scale (roughly -4 most-bearish .. +4 most-bullish). Doing it
+# via the lexicon (rather than a flat keyword count) keeps VADER's grammar
+# handling — negation ("not a beat"), intensifiers ("sharply weak"), degree
+# modifiers — which the old fallback ignored.
+_FINANCE_LEXICON: dict[str, float] = {
+    # Bullish
+    "beat": 1.9, "beats": 1.9, "surge": 2.5, "surges": 2.5, "soar": 2.8,
+    "soars": 2.8, "rally": 1.9, "rallies": 1.9, "gain": 1.5, "gains": 1.5,
+    "jump": 1.5, "jumps": 1.5, "rise": 1.0, "rises": 1.0, "upgrade": 2.2,
+    "upgraded": 2.2, "outperform": 2.2, "bullish": 2.5, "record": 1.5,
+    "strong": 1.8, "growth": 1.5, "profit": 1.8, "boom": 2.0, "rebound": 1.8,
+    "buy": 1.3, "boost": 1.5, "boosts": 1.5, "optimistic": 1.8, "expand": 1.2,
+    "expands": 1.2, "demand": 1.0, "breakthrough": 2.2, "tailwind": 1.8,
+    "raises": 1.3, "raised": 1.3, "topped": 1.6, "tops": 1.6,
+    # Bearish
+    "miss": -1.9, "misses": -1.9, "plunge": -2.8, "plunges": -2.8,
+    "slump": -2.2, "slumps": -2.2, "tumble": -2.5, "tumbles": -2.5,
+    "fall": -1.2, "falls": -1.2, "drop": -1.2, "drops": -1.2, "decline": -1.5,
+    "declines": -1.5, "downgrade": -2.2, "downgraded": -2.2,
+    "underperform": -2.2, "bearish": -2.5, "weak": -1.8, "loss": -1.8,
+    "losses": -1.8, "cut": -1.3, "cuts": -1.3, "slowdown": -1.8, "warn": -1.8,
+    "warns": -1.8, "warning": -1.8, "sell": -1.2, "selloff": -2.2,
+    "recession": -2.5, "fear": -2.0, "fears": -2.0, "glut": -1.8,
+    "headwind": -1.8, "lawsuit": -1.8, "probe": -1.5, "shortage": -1.5,
+    "slash": -2.0, "slashed": -2.0, "layoff": -2.2, "layoffs": -2.2,
+    "bankruptcy": -3.0, "default": -2.0, "downturn": -2.2, "disappoint": -2.0,
+    "disappoints": -2.0,
+}
+
 _vader_analyzer = None
 _vader_lock = threading.Lock()
 
 
 def _get_vader_analyzer():
-    """Return the process-wide VADER analyzer, building it on first use."""
+    """Return the process-wide VADER analyzer (finance-boosted), built on first use."""
     global _vader_analyzer
     if _vader_analyzer is None:
         with _vader_lock:
             if _vader_analyzer is None:
                 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-                _vader_analyzer = SentimentIntensityAnalyzer()
+                analyzer = SentimentIntensityAnalyzer()
+                analyzer.lexicon.update(_FINANCE_LEXICON)
+                _vader_analyzer = analyzer
     return _vader_analyzer
 
 
