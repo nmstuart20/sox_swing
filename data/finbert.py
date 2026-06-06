@@ -60,6 +60,11 @@ class FinBertScorer:
         self._neg_idx = 1
         self._load_failed = False
 
+    @property
+    def model_name(self) -> str:
+        """The HuggingFace model id this scorer loads."""
+        return self._model_name
+
     # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
@@ -163,6 +168,15 @@ class FinBertScorer:
     def score_text(self, text: str | None) -> float:
         """Score a single piece of text in ``[-1, 1]``."""
         return self.score_texts([text])[0]
+
+    def ensure_available(self) -> None:
+        """Eagerly load the model so availability is known up front.
+
+        Raises :class:`FinBertUnavailable` if FinBERT can't be loaded. Lets
+        callers surface the analyzer choice (and pay the load cost) at startup
+        instead of on the first scoring call.
+        """
+        self._ensure_loaded()
 
 
 _default_scorer: FinBertScorer | None = None

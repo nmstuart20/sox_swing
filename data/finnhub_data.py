@@ -236,6 +236,14 @@ class FinnhubData:
             ",".join(self._sector_symbols) or "none",
             self._min_interval,
         )
+        # Probe FinBERT up front so the analyzer choice (and any model-load
+        # cost) surfaces at startup rather than on the first scoring cycle.
+        try:
+            self._finbert.ensure_available()
+            logger.info("Sentiment analyzer: FinBERT (%s)", self._finbert.model_name)
+        except FinBertUnavailable as exc:
+            self._finbert_unavailable = True
+            logger.info("Sentiment analyzer: VADER (FinBERT unavailable: %s)", exc)
 
     @property
     def sector_symbols(self) -> tuple[str, ...]:
