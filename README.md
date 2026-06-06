@@ -1,7 +1,8 @@
 # SOXL/SOXS Trading Bot
 
 An automated bot that trades **only SOXL and SOXS** through **Alpaca**, using
-technical analysis and Finnhub news sentiment.
+technical analysis and FinBERT-scored Finnhub news sentiment (falling back to
+VADER on hosts without torch, e.g. the 32-bit ARM Pi).
 
 ## Quick start
 

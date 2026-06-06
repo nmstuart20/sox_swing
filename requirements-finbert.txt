@@ -1,0 +1,10 @@
+# FinBERT news-sentiment extras (data/finbert.py): a finance-tuned BERT scorer.
+#
+# Kept separate from requirements-pi.txt because torch publishes NO wheels for
+# 32-bit ARM (armv7l). On 64-bit targets (x86_64/aarch64) these install from
+# PyPI and FinBERT runs; on 32-bit ARM the install is skipped (see Containerfile)
+# and the bot falls back to VADER — FinBertUnavailable at runtime.
+#
+# torch is large (hundreds of MB); expect a correspondingly bigger image.
+transformers==4.46.3
+torch==2.9.0

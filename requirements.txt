@@ -7,3 +7,11 @@ pandas==3.0.3
 numpy==2.4.6
 ta==0.11.0
 python-dotenv==1.2.2
+# VADER backs the news-sentiment fallback (data/finnhub_data.py) when FinBERT
+# can't load. Pure Python, no compiled deps, so it installs everywhere including
+# the 32-bit ARM Pi target where torch has no wheels.
+vaderSentiment==3.3.2
+# FinBERT news-sentiment scoring (data/finbert.py). Pulled in via its own file so
+# the container can install it best-effort — torch has no 32-bit ARM wheels, and
+# there the bot falls back to VADER (see requirements-finbert.txt).
+-r requirements-finbert.txt

@@ -28,8 +28,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies first so this layer is cached across code changes.
-COPY requirements-pi.txt ./
+COPY requirements-pi.txt requirements-finbert.txt ./
 RUN pip install --no-cache-dir -r requirements-pi.txt
+
+# FinBERT extras (torch + transformers) for news sentiment. torch has no 32-bit
+# ARM wheels, so on armv7l we skip them on purpose and the bot falls back to
+# VADER. On every other arch (x86_64/aarch64) the install is required, so a
+# failure fails the build loudly rather than silently disabling FinBERT.
+RUN arch="$(uname -m)"; \
+    if [ "$arch" = "armv7l" ] || [ "$arch" = "armv6l" ]; then \
+        echo "32-bit ARM ($arch): skipping FinBERT extras (no torch wheels); VADER fallback"; \
+    else \
+        pip install --no-cache-dir -r requirements-finbert.txt; \
+    fi
 
 # Application code.
 COPY . .

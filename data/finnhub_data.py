@@ -8,9 +8,10 @@ into a trade decision. Responsibilities:
     sector (SMH, NVDA, AMD, ... — configurable),
   * normalize each article into a tidy row (timestamp, symbol, headline,
     source, url, summary, sentiment),
-  * attach a sentiment score per article — preferring Finnhub's symbol-level
-    sentiment, with a simple keyword-based fallback when it's unavailable
-    (the company news-sentiment endpoint is premium-gated),
+  * attach a sentiment score per article with FinBERT (a finance-tuned BERT),
+    falling back to VADER (a rule-based sentiment analyzer) when
+    torch/transformers aren't available (e.g. the 32-bit ARM Pi target, where
+    torch has no wheels),
   * expose an aggregate sentiment score per symbol and best-effort economic
     data lookups,
   * stay under Finnhub's free-tier rate limit (60 calls/min) with a proactive
@@ -22,7 +23,6 @@ and order placement from ``execution/alpaca_client.py``.
 
 from __future__ import annotations
 
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +36,7 @@ import finnhub
 
 from config.logging_setup import get_logger
 from config.settings import FinnhubConfig
+from data.finbert import FinBertScorer, FinBertUnavailable, get_default_scorer
 
 logger = get_logger(__name__)
 
@@ -52,29 +53,25 @@ DEFAULT_SECTOR_SYMBOLS = ("SMH", "NVDA", "AMD", "TSM", "AVGO", "INTC", "TXN", "M
 # calls keeps us comfortably under it without external coordination.
 _DEFAULT_MIN_REQUEST_INTERVAL = 1.05
 
-# Lightweight lexicon for the keyword-based sentiment fallback. Scores are the
-# net of bullish vs. bearish hits, normalized to [-1, 1] by total hits.
-_BULLISH_WORDS = frozenset(
-    {
-        "beat", "beats", "surge", "surges", "soar", "soars", "rally", "rallies",
-        "gain", "gains", "jump", "jumps", "rise", "rises", "upgrade", "upgraded",
-        "outperform", "bullish", "record", "strong", "growth", "profit", "boom",
-        "rebound", "buy", "boost", "boosts", "optimistic", "expand", "expands",
-        "demand", "breakthrough", "tailwind", "raises", "raised", "topped", "tops",
-    }
-)
-_BEARISH_WORDS = frozenset(
-    {
-        "miss", "misses", "plunge", "plunges", "slump", "slumps", "tumble",
-        "tumbles", "fall", "falls", "drop", "drops", "decline", "declines",
-        "downgrade", "downgraded", "underperform", "bearish", "weak", "loss",
-        "losses", "cut", "cuts", "slowdown", "warn", "warns", "warning",
-        "sell", "selloff", "recession", "fear", "fears", "glut", "headwind",
-        "lawsuit", "probe", "shortage", "slash", "slashed", "layoff", "layoffs",
-        "bankruptcy", "default", "downturn", "disappoint", "disappoints",
-    }
-)
-_WORD_RE = re.compile(r"[a-z']+")
+# VADER (Valence Aware Dictionary and sEntiment Reasoner) backs the sentiment
+# fallback used when FinBERT can't load. It's a pure-Python, rule-based analyzer
+# with no compiled dependencies, so it installs and runs even on the 32-bit ARM
+# Pi target where torch has no wheels. The analyzer carries a ~7k-word lexicon
+# loaded from disk, so we build it once, lazily, and reuse it.
+_vader_analyzer = None
+_vader_lock = threading.Lock()
+
+
+def _get_vader_analyzer():
+    """Return the process-wide VADER analyzer, building it on first use."""
+    global _vader_analyzer
+    if _vader_analyzer is None:
+        with _vader_lock:
+            if _vader_analyzer is None:
+                from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+                _vader_analyzer = SentimentIntensityAnalyzer()
+    return _vader_analyzer
 
 
 class FinnhubError(Exception):
@@ -134,25 +131,35 @@ def _with_retry(
     return decorator
 
 
-def keyword_sentiment(text: str | None) -> float:
-    """Score free text in ``[-1, 1]`` by net bullish/bearish keyword hits.
+def vader_sentiment(text: str | None) -> float:
+    """Score free text in ``[-1, 1]`` with VADER (positive = bullish).
 
-    Returns 0.0 for empty text or text with no recognized keywords. This is the
-    fallback used when Finnhub's symbol-level sentiment is unavailable, and the
-    per-article scorer in every news frame.
+    Returns VADER's ``compound`` score, which is already normalized to
+    ``[-1, 1]``; empty text scores a neutral 0.0. This is the fallback used when
+    FinBERT can't be loaded (see :func:`score_news_texts`).
     """
-    if not text:
+    if not text or not text.strip():
         return 0.0
-    bullish = bearish = 0
-    for word in _WORD_RE.findall(text.lower()):
-        if word in _BULLISH_WORDS:
-            bullish += 1
-        elif word in _BEARISH_WORDS:
-            bearish += 1
-    total = bullish + bearish
-    if total == 0:
-        return 0.0
-    return (bullish - bearish) / total
+    return float(_get_vader_analyzer().polarity_scores(text)["compound"])
+
+
+def score_news_texts(
+    texts: Sequence[str | None],
+    scorer: FinBertScorer | None = None,
+) -> tuple[list[float], str]:
+    """Score article texts in ``[-1, 1]``, preferring FinBERT.
+
+    Falls back to :func:`vader_sentiment` if FinBERT can't be loaded (missing
+    torch/transformers, or weights unreachable). Returns ``(scores, source)``
+    where ``source`` is ``"finbert"`` or ``"vader"`` so callers can label the
+    aggregate they build from these scores.
+    """
+    scorer = scorer or get_default_scorer()
+    try:
+        return scorer.score_texts(texts), "finbert"
+    except FinBertUnavailable as exc:
+        logger.info("FinBERT unavailable (%s); using VADER sentiment", exc)
+        return [vader_sentiment(t) for t in texts], "vader"
 
 
 @dataclass(frozen=True)
@@ -162,7 +169,7 @@ class SentimentResult:
     symbol: str
     score: float  # normalized to [-1, 1]; positive = bullish
     article_count: int
-    source: str  # "finnhub" or "keyword"
+    source: str  # "finbert" or "vader"
 
 
 class FinnhubData:
@@ -178,15 +185,17 @@ class FinnhubData:
         config: FinnhubConfig,
         sector_symbols: Sequence[str] = DEFAULT_SECTOR_SYMBOLS,
         min_request_interval: float = _DEFAULT_MIN_REQUEST_INTERVAL,
+        finbert: FinBertScorer | None = None,
     ) -> None:
         self._client = finnhub.Client(api_key=config.api_key)
         self._sector_symbols = tuple(sector_symbols)
         self._min_interval = max(0.0, min_request_interval)
         self._gate_lock = threading.Lock()
         self._last_call_at = 0.0
-        # Set once the symbol-level sentiment endpoint proves unavailable
-        # (e.g. premium-gated) so we don't re-probe — and re-log — every cycle.
-        self._finnhub_sentiment_unavailable = False
+        self._finbert = finbert or get_default_scorer()
+        # Set once FinBERT proves unavailable (no torch wheels, weights
+        # unreachable, ...) so we don't re-probe — and re-log — every cycle.
+        self._finbert_unavailable = False
         logger.info(
             "FinnhubData initialized (sector=%s, min_interval=%.2fs)",
             ",".join(self._sector_symbols) or "none",
@@ -223,7 +232,7 @@ class FinnhubData:
         """Return normalized company news for ``symbol``.
 
         The result has columns :data:`NEWS_COLUMNS`, sorted by ascending
-        timestamp (tz-aware UTC), with a per-article keyword sentiment score.
+        timestamp (tz-aware UTC), with a per-article sentiment score.
 
         Args:
             start/end: explicit window. ``end`` defaults to now; ``start``
@@ -292,11 +301,14 @@ class FinnhubData:
                     "source": (article.get("source") or "").strip(),
                     "url": article.get("url") or "",
                     "summary": summary,
-                    "sentiment": keyword_sentiment(f"{headline}. {summary}"),
                 }
             )
         if not rows:
             return self._empty_news_frame()
+
+        scores = self._score_texts([f"{r['headline']}. {r['summary']}" for r in rows])
+        for row, score in zip(rows, scores):
+            row["sentiment"] = score
 
         df = pd.DataFrame(rows, columns=NEWS_COLUMNS)
         df = df[df["headline"] != ""]
@@ -317,46 +329,30 @@ class FinnhubData:
     def get_news_sentiment(self, symbol: str, lookback_days: int = 7) -> SentimentResult:
         """Aggregate sentiment for ``symbol`` in ``[-1, 1]``.
 
-        Prefers Finnhub's company news-sentiment score (``companyNewsScore``,
-        a 0-1 bullishness level remapped to [-1, 1]). That endpoint is premium
-        on many plans; when it's unavailable or empty, falls back to the mean
-        per-article keyword sentiment over recent news.
+        The score is the mean per-article FinBERT sentiment over recent company
+        news (positive = bullish); each article is scored when its news frame is
+        built. Reports ``source="finbert"``, or ``"vader"`` if FinBERT had to
+        fall back. An empty window scores a neutral 0.0.
         """
-        finnhub_score = self._try_finnhub_sentiment(symbol)
-        if finnhub_score is not None:
-            return SentimentResult(symbol, finnhub_score, article_count=0, source="finnhub")
-
         news = self.get_company_news(symbol, lookback_days=lookback_days)
+        source = "vader" if self._finbert_unavailable else "finbert"
         if news.empty:
-            return SentimentResult(symbol, 0.0, article_count=0, source="keyword")
+            return SentimentResult(symbol, 0.0, article_count=0, source=source)
         score = float(news["sentiment"].mean())
-        return SentimentResult(symbol, score, article_count=len(news), source="keyword")
+        return SentimentResult(symbol, score, article_count=len(news), source=source)
 
-    def _try_finnhub_sentiment(self, symbol: str) -> float | None:
-        """Return Finnhub's symbol-level score in [-1, 1], or None if unavailable."""
-        if self._finnhub_sentiment_unavailable:
-            return None
-        try:
-            data = self._fetch_news_sentiment(symbol)
-        except FinnhubError as exc:
-            logger.info(
-                "Finnhub news-sentiment unavailable (%s); using keyword fallback from now on",
-                exc,
-            )
-            self._finnhub_sentiment_unavailable = True
-            return None
-        if not isinstance(data, dict):
-            return None
-        score = data.get("companyNewsScore")
-        if score is None:
-            return None
-        # companyNewsScore is a 0-1 bullishness level; remap to [-1, 1].
-        return max(-1.0, min(1.0, (float(score) - 0.5) * 2.0))
+    def _score_texts(self, texts: list[str]) -> list[float]:
+        """Score article texts in ``[-1, 1]`` via FinBERT, with VADER fallback.
 
-    @_with_retry()
-    def _fetch_news_sentiment(self, symbol: str) -> dict[str, Any]:
-        self._throttle()
-        return self._client.news_sentiment(symbol)
+        Once FinBERT proves unavailable we latch onto VADER for the rest of the
+        process so we don't re-probe (or re-log) every cycle.
+        """
+        if self._finbert_unavailable:
+            return [vader_sentiment(t) for t in texts]
+        scores, source = score_news_texts(texts, self._finbert)
+        if source == "vader":
+            self._finbert_unavailable = True
+        return scores
 
     # ------------------------------------------------------------------
     # Economic data (best-effort)

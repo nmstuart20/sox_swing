@@ -191,7 +191,7 @@ class SignalEngine:
             sentiment_score: semis bullishness in ``[-1, 1]`` (positive = bullish on
                 the sector, i.e. favoring SOXL). Defaults to neutral so the engine
                 degrades to a purely technical decision if news is unavailable.
-            sentiment_meta: optional note (e.g. "finnhub", "keyword/12 articles")
+            sentiment_meta: optional note (e.g. "finnhub", "vader/12 articles")
                 folded into the reasons for traceability.
 
         Returns:

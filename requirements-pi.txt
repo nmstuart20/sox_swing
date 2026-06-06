@@ -8,9 +8,15 @@
 #
 # The dev environment uses requirements.txt (newer numpy/pandas on Python 3.14);
 # this file exists only because cross-arch + cross-Python pins can't be identical.
+#
+# transformers/torch (FinBERT, in requirements.txt) are intentionally absent:
+# torch publishes no 32-bit ARM wheels, so the bot falls back to VADER on the Pi
+# (data/finbert.py raises FinBertUnavailable). VADER is pure Python, so it
+# installs from PyPI here without needing piwheels.
 alpaca-py==0.43.4
 finnhub-python==2.4.28
 pandas==2.2.3
 numpy==1.26.4
 ta==0.11.0
 python-dotenv==1.2.2
+vaderSentiment==3.3.2
