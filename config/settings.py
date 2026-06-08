@@ -111,6 +111,11 @@ class RiskConfig:
     # favorable excursion (an ATR-chandelier exit) so winners can run. Active in
     # the backtest broker; live wiring (an Alpaca trailing-stop order) is TODO.
     trailing_stop: bool = False
+    # When True (default), position size is bounded by both the notional cap
+    # (``max_position_pct``) and a per-trade risk budget keyed off the ATR stop.
+    # Set False to size purely off the notional cap — e.g. deploy 100% of equity
+    # with ``MAX_POSITION_PCT=1.0`` regardless of how far away the stop sits.
+    risk_based_sizing: bool = True
 
 
 @dataclass(frozen=True)
@@ -204,6 +209,7 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
             atr_take_profit_multiplier=_get_float("ATR_TAKE_PROFIT_MULTIPLIER", 3.0),
             flip_confidence_threshold=_get_float("FLIP_CONFIDENCE_THRESHOLD", 0.3),
             trailing_stop=_get_bool("TRAILING_STOP", False),
+            risk_based_sizing=_get_bool("RISK_BASED_SIZING", True),
         ),
         strategy=StrategyConfig(
             technical_weight=_get_float("TECHNICAL_WEIGHT", 0.6),

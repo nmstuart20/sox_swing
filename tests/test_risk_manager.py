@@ -44,6 +44,19 @@ def test_position_size_capped_by_risk_budget(risk_config):
     assert qty2 == 200
 
 
+def test_position_size_notional_only_when_risk_sizing_disabled(risk_config):
+    from dataclasses import replace
+
+    # risk_based_sizing off + full notional cap => deploy 100% of equity,
+    # ignoring the (otherwise binding) per-trade risk budget.
+    config = replace(risk_config, max_position_pct=1.0, risk_based_sizing=False)
+    rm = RiskManager(config, params=RiskParams(risk_per_trade_pct=0.01))
+    # A wide stop would normally bind the risk budget hard ($1000 / $5 = 200),
+    # but with risk sizing off only the notional cap applies: 100k / 20 = 5000.
+    qty = rm.position_size(equity=100_000, entry_price=20.0, stop_loss=15.0)
+    assert qty == 5000
+
+
 def test_position_size_rounds_down_to_whole_shares(rm):
     qty = rm.position_size(equity=10_000, entry_price=30.0, stop_loss=29.0)
     assert isinstance(qty, int)

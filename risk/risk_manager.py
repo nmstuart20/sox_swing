@@ -290,6 +290,10 @@ class RiskManager:
         Taking the minimum keeps leveraged exposure conservative regardless of
         how tight or wide the ATR stop happens to be. Rounded down to whole
         shares.
+
+        When ``risk_based_sizing`` is disabled the risk budget is skipped and
+        size is bounded by the notional cap alone, so ``max_position_pct=1.0``
+        deploys the full equity regardless of stop distance.
         """
         if entry_price <= 0 or equity <= 0:
             return 0
@@ -297,7 +301,7 @@ class RiskManager:
         qty_by_notional = notional_cap / entry_price
 
         stop_dist = entry_price - stop_loss
-        if stop_dist > 0:
+        if self._config.risk_based_sizing and stop_dist > 0:
             risk_budget = self._params.risk_per_trade_pct * equity
             qty_by_risk = risk_budget / stop_dist
             qty = min(qty_by_notional, qty_by_risk)
