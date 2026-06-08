@@ -131,6 +131,7 @@ class SimPosition:
     stop_price: float           # bracket stop (sell-stop below entry)
     take_profit: float          # bracket target (sell-limit above entry; 0 = none)
     mark: float                 # latest close
+    trail_distance: float = 0.0  # if > 0, stop ratchets to keep this far below the high
 
     @property
     def unrealized_pl(self) -> float:
@@ -206,10 +207,16 @@ class SimBroker:
         self,
         initial_capital: float = 100_000.0,
         cost_model: CostModel | None = None,
+        *,
+        trailing_stop: bool = False,
     ) -> None:
         self._initial = float(initial_capital)
         self._cash = float(initial_capital)
         self._costs = cost_model or CostModel()
+        # When True, an open position's stop ratchets up to stay a fixed distance
+        # (its initial stop distance) below the highest bar high seen — a
+        # chandelier trail that locks in favorable moves.
+        self._trailing = bool(trailing_stop)
 
         self._positions: dict[str, SimPosition] = {}
         self._orders: dict[str, SimOrder] = {}
@@ -287,11 +294,16 @@ class SimBroker:
                 trigger = max(pos.take_profit, bar["open"])
                 self._exit(symbol, trigger, reason="take-profit")
 
-        # 2. Re-mark survivors to this bar's close.
+        # 2. Re-mark survivors to this bar's close and ratchet any trailing stop.
+        #    The trail uses *this* bar's high but only tightens the stop for the
+        #    next bar onward (it never fires against the same bar's low above),
+        #    so there's no intrabar lookahead. The stop only ever moves up.
         for symbol, pos in self._positions.items():
             bar = ohlc.get(symbol)
             if bar is not None:
                 pos.mark = bar["close"]
+                if pos.trail_distance > 0:
+                    pos.stop_price = max(pos.stop_price, bar["high"] - pos.trail_distance)
 
         # 3. Record the equity point for the curve.
         self.max_concurrent = max(self.max_concurrent, len(self._positions))
@@ -401,6 +413,9 @@ class SimBroker:
         self._cash -= qty * fill_price + commission
         self.total_commission += commission
 
+        # The trail rides at the bracket's own initial stop distance below the
+        # high-water mark; 0 leaves the stop fixed (trailing disabled).
+        trail_distance = max(fill_price - float(stop_loss_price), 0.0) if self._trailing else 0.0
         self._positions[symbol] = SimPosition(
             symbol=symbol,
             qty=qty,
@@ -411,6 +426,7 @@ class SimBroker:
             stop_price=float(stop_loss_price),
             take_profit=float(take_profit_price),
             mark=self._mark_or_raise(symbol),
+            trail_distance=trail_distance,
         )
         order = self._make_order(symbol, side_value, qty, fill_price, client_order_id)
         logger.info(

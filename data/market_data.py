@@ -27,7 +27,7 @@ from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
-from alpaca.data.enums import DataFeed
+from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import (
     StockBarsRequest,
@@ -247,6 +247,10 @@ class MarketData:
             end=end,
             limit=limit,
             feed=self._feed,
+            # Split-adjust so a reverse split (e.g. SOXS, 2026-03-05) doesn't
+            # splice old and new share-denominated prices into one series,
+            # which otherwise reads as a ~20x overnight jump.
+            adjustment=Adjustment.SPLIT,
         )
         barset = self._fetch_bars(request)
         frame = self._to_frame(barset, symbol)

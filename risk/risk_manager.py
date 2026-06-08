@@ -276,7 +276,9 @@ class RiskManager:
         tp_dist = self._config.atr_take_profit_multiplier * atr
         # Keep the stop strictly positive even for a wild ATR on a low-priced ETF.
         stop = max(entry_price - stop_dist, 0.01)
-        take = entry_price + tp_dist
+        # With a trailing stop the position has no fixed ceiling — the ratcheting
+        # stop harvests winners instead — so a take-profit of 0 disables it.
+        take = 0.0 if self._config.trailing_stop else entry_price + tp_dist
         return stop, take
 
     def position_size(self, equity: float, entry_price: float, stop_loss: float) -> int:
@@ -379,8 +381,17 @@ class RiskManager:
             )
 
         # 7. No-both-legs rule: if the opposite leg is open, it must close first.
+        #    Reversals also pass a hysteresis gate so a marginal opposite signal
+        #    can't whipsaw an existing position in and out (both directions pay
+        #    slippage + commission).
         close_symbols: tuple[str, ...] = ()
         if _has_position(positions.get(opposite)):
+            flip_bar = self._config.flip_confidence_threshold
+            if signal.confidence < flip_bar:
+                return self._veto(
+                    f"flip to {target} below hysteresis "
+                    f"(confidence {signal.confidence:.2f} < {flip_bar:.2f}) — holding {opposite}"
+                )
             close_symbols = (opposite,)
 
         decision = RiskDecision(

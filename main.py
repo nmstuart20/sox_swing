@@ -46,7 +46,7 @@ from monitoring.alerts import AlertLevel, DiscordNotifier
 from monitoring.monitor import Monitor
 from risk.risk_manager import RiskManager
 from strategy.indicators import IndicatorError, IndicatorParams, IndicatorSnapshot, latest_snapshot
-from strategy.signal_engine import SignalEngine, TradeSignal
+from strategy.signal_engine import SignalEngine, SignalParams, TradeSignal
 
 logger = get_logger(__name__)
 
@@ -330,6 +330,7 @@ def build_engine(settings: Settings) -> TradingEngine:
         settings.strategy,
         symbol_long=settings.symbol_long,
         symbol_short=settings.symbol_short,
+        params=SignalParams(entry_threshold=settings.strategy.entry_threshold),
     )
     risk_manager = RiskManager(
         settings.risk,

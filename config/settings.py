@@ -102,12 +102,23 @@ class RiskConfig:
     max_trades_per_day: int
     atr_stop_multiplier: float
     atr_take_profit_multiplier: float
+    # Hysteresis on reversals: a flip (entering one leg while the opposite is
+    # held) is approved only when the new signal's confidence meets this bar.
+    # 0 disables the gate, preserving the original "flip on any actionable
+    # opposite signal" behavior.
+    flip_confidence_threshold: float = 0.0
+    # When True, the fixed ATR take-profit is dropped and the stop trails the
+    # favorable excursion (an ATR-chandelier exit) so winners can run. Active in
+    # the backtest broker; live wiring (an Alpaca trailing-stop order) is TODO.
+    trailing_stop: bool = False
 
 
 @dataclass(frozen=True)
 class StrategyConfig:
     technical_weight: float
     sentiment_weight: float
+    # Minimum |combined score| to take a side; below this the engine stays flat.
+    entry_threshold: float = 0.08
 
 
 @dataclass(frozen=True)
@@ -187,10 +198,13 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
             max_trades_per_day=_get_int("MAX_TRADES_PER_DAY", 10),
             atr_stop_multiplier=_get_float("ATR_STOP_MULTIPLIER", 2.0),
             atr_take_profit_multiplier=_get_float("ATR_TAKE_PROFIT_MULTIPLIER", 3.0),
+            flip_confidence_threshold=_get_float("FLIP_CONFIDENCE_THRESHOLD", 0.0),
+            trailing_stop=_get_bool("TRAILING_STOP", False),
         ),
         strategy=StrategyConfig(
             technical_weight=_get_float("TECHNICAL_WEIGHT", 0.7),
             sentiment_weight=_get_float("SENTIMENT_WEIGHT", 0.3),
+            entry_threshold=_get_float("ENTRY_THRESHOLD", 0.08),
         ),
         engine=EngineConfig(
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),

@@ -42,7 +42,7 @@ from strategy.indicators import (
     compute_indicators,
     latest_snapshot,
 )
-from strategy.signal_engine import SignalEngine
+from strategy.signal_engine import SignalEngine, SignalParams
 
 logger = get_logger(__name__)
 
@@ -289,7 +289,11 @@ def build_backtest_engine(
     news feed. Sentiment is replayed only when ``news`` is supplied *and* the
     strategy's sentiment weight is positive, mirroring ``build_engine``'s gate.
     """
-    broker = SimBroker(initial_capital=initial_capital, cost_model=cost_model)
+    broker = SimBroker(
+        initial_capital=initial_capital,
+        cost_model=cost_model,
+        trailing_stop=settings.risk.trailing_stop,
+    )
 
     finnhub: BacktestFinnhub | None = None
     if news is not None and settings.strategy.sentiment_weight > 0:
@@ -301,6 +305,7 @@ def build_backtest_engine(
         settings.strategy,
         symbol_long=settings.symbol_long,
         symbol_short=settings.symbol_short,
+        params=SignalParams(entry_threshold=settings.strategy.entry_threshold),
     )
     risk_manager = RiskManager(
         settings.risk,

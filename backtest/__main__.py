@@ -25,7 +25,7 @@ import sys
 from backtest.broker import CostModel
 from backtest.data import load_bars, load_news, parse_window
 from backtest.engine import build_backtest_engine
-from backtest.metrics import format_report, trades_to_frame
+from backtest.metrics import equity_series, format_report, trades_to_frame
 from config import load_settings, setup_logging
 from config.logging_setup import get_logger
 
@@ -49,6 +49,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--commission-min", type=float, default=0.0, help="Per-order commission floor.")
     p.add_argument("--no-news", action="store_true", help="Skip Finnhub; run technicals-only.")
     p.add_argument("--trade-log", default=None, help="Write the trade log to this CSV path.")
+    p.add_argument(
+        "--equity-curve", default=None,
+        help="Write the mark-to-market equity curve (time,equity) to this CSV path.",
+    )
     p.add_argument("--max-trades-shown", type=int, default=50, help="Trades to print (0 = all).")
     return p
 
@@ -102,6 +106,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.trade_log:
         trades_to_frame(result.trades).to_csv(args.trade_log, index=False)
         print(f"\nTrade log written to {args.trade_log}")
+
+    if args.equity_curve:
+        equity_series(result.equity_curve).rename("equity").to_csv(
+            args.equity_curve, index_label="time"
+        )
+        print(f"Equity curve written to {args.equity_curve}")
 
     return 0
 

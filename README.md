@@ -34,15 +34,34 @@ Keys are read from `.env`.
 python -m backtest --start 2026-05-20 --end 2026-06-03
 
 # Bigger account, wider slippage, per-share commission, write the trade log:
-python -m backtest --start 2026-05-01 --capital 250000 \
+python -m backtest --start 2025-01-03 --capital 5000 \
     --slippage-bps 5 --commission-per-share 0.005 --trade-log trades.csv
 
 # Technicals only (skip the Finnhub news pull):
 python -m backtest --start 2026-05-20 --no-news
+
+# Save the mark-to-market equity curve (time,equity) to CSV:
+python -m backtest --start 2026-01-01 --end 2026-06-01 --equity-curve curve.csv
 ```
 
 Reports total return, annualized Sharpe, max drawdown, win rate, and a per-trade
-log. `--trade-log PATH` writes the full log to CSV.
+log. `--trade-log PATH` writes the full log to CSV; `--equity-curve PATH` writes
+the equity curve.
+
+### Drawdown attribution
+
+A long run can post a max drawdown far larger than the 5% daily stop — that's
+expected, since the daily stop caps a *single session* while max drawdown is the
+peak-to-trough decline across the *whole* curve. This script reads a saved
+equity curve and splits the drawdown into its two causes — a multi-day grind of
+in-limit down-days vs. single-session overshoot of the daily stop:
+
+```bash
+python -m backtest.analyze_drawdown curve.csv
+
+# Override the daily limit (default: max_daily_loss_pct from .env) / list more breaches:
+python -m backtest.analyze_drawdown curve.csv --daily-limit 0.05 --top 15
+```
 
 ## Deploy with containers (Podman or Docker)
 
