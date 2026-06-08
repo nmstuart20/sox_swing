@@ -322,7 +322,10 @@ def build_engine(settings: Settings) -> TradingEngine:
     finnhub: FinnhubData | None = None
     if settings.strategy.sentiment_weight > 0:
         try:
-            finnhub = FinnhubData(settings.finnhub)
+            finnhub = FinnhubData(
+                settings.finnhub,
+                sentiment_method=settings.strategy.sentiment_method,
+            )
         except Exception as exc:  # noqa: BLE001 - sentiment is optional, degrade cleanly
             logger.warning("Finnhub init failed, running technicals-only: %s", exc)
 

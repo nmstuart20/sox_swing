@@ -61,7 +61,11 @@ def load_news(
     bars of the backtest already have a populated lookback (the engine still
     only reveals articles dated at/<= each bar, so there's no look-ahead).
     """
-    fh = finnhub or FinnhubData(settings.finnhub, sector_symbols=sector_symbols)
+    fh = finnhub or FinnhubData(
+        settings.finnhub,
+        sector_symbols=sector_symbols,
+        sentiment_method=settings.strategy.sentiment_method,
+    )
     news_start = start - timedelta(days=sentiment_lookback_days)
     symbols = (settings.symbol_long, settings.symbol_short, *sector_symbols)
 

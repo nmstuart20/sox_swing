@@ -299,7 +299,11 @@ def build_backtest_engine(
     if news is not None and settings.strategy.sentiment_weight > 0:
         from data.finnhub_data import DEFAULT_SECTOR_SYMBOLS
 
-        finnhub = BacktestFinnhub(news, sector_symbols=DEFAULT_SECTOR_SYMBOLS)
+        finnhub = BacktestFinnhub(
+            news,
+            sector_symbols=DEFAULT_SECTOR_SYMBOLS,
+            sentiment_method=settings.strategy.sentiment_method,
+        )
 
     signal_engine = SignalEngine(
         settings.strategy,

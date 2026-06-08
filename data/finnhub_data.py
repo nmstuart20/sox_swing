@@ -181,14 +181,19 @@ def vader_sentiment(text: str | None) -> float:
 def score_news_texts(
     texts: Sequence[str | None],
     scorer: FinBertScorer | None = None,
+    method: str = "finbert",
 ) -> tuple[list[float], str]:
-    """Score article texts in ``[-1, 1]``, preferring FinBERT.
+    """Score article texts in ``[-1, 1]`` with the requested method.
 
-    Falls back to :func:`vader_sentiment` if FinBERT can't be loaded (missing
-    torch/transformers, or weights unreachable). Returns ``(scores, source)``
-    where ``source`` is ``"finbert"`` or ``"vader"`` so callers can label the
-    aggregate they build from these scores.
+    ``method`` selects the scorer: ``"vader"`` uses the rule-based analyzer
+    directly, while ``"finbert"`` (the default) prefers FinBERT and falls back
+    to :func:`vader_sentiment` if it can't be loaded (missing torch/transformers,
+    or weights unreachable). Returns ``(scores, source)`` where ``source`` is
+    ``"finbert"`` or ``"vader"`` so callers can label the aggregate they build
+    from these scores.
     """
+    if method == "vader":
+        return [vader_sentiment(t) for t in texts], "vader"
     scorer = scorer or get_default_scorer()
     try:
         return scorer.score_texts(texts), "finbert"
@@ -221,6 +226,7 @@ class FinnhubData:
         sector_symbols: Sequence[str] = DEFAULT_SECTOR_SYMBOLS,
         min_request_interval: float = _DEFAULT_MIN_REQUEST_INTERVAL,
         finbert: FinBertScorer | None = None,
+        sentiment_method: str = "finbert",
     ) -> None:
         self._client = finnhub.Client(api_key=config.api_key)
         self._sector_symbols = tuple(sector_symbols)
@@ -228,14 +234,19 @@ class FinnhubData:
         self._gate_lock = threading.Lock()
         self._last_call_at = 0.0
         self._finbert = finbert or get_default_scorer()
-        # Set once FinBERT proves unavailable (no torch wheels, weights
-        # unreachable, ...) so we don't re-probe — and re-log — every cycle.
+        # Set once FinBERT is out of the running — either the user pinned VADER
+        # via SENTIMENT_METHOD, or FinBERT proved unavailable (no torch wheels,
+        # weights unreachable, ...) — so we don't re-probe (or re-log) per cycle.
         self._finbert_unavailable = False
         logger.info(
             "FinnhubData initialized (sector=%s, min_interval=%.2fs)",
             ",".join(self._sector_symbols) or "none",
             self._min_interval,
         )
+        if sentiment_method == "vader":
+            self._finbert_unavailable = True
+            logger.info("Sentiment analyzer: VADER (selected via SENTIMENT_METHOD)")
+            return
         # Probe FinBERT up front so the analyzer choice (and any model-load
         # cost) surfaces at startup rather than on the first scoring cycle.
         try:

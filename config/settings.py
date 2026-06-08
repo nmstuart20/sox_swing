@@ -119,6 +119,10 @@ class StrategyConfig:
     sentiment_weight: float
     # Minimum |combined score| to take a side; below this the engine stays flat.
     entry_threshold: float = 0.08
+    # News-sentiment scorer: "finbert" (finance-tuned BERT, default) or "vader"
+    # (rule-based, no torch dependency). "finbert" still falls back to VADER if
+    # torch/transformers can't load; "vader" skips FinBERT entirely.
+    sentiment_method: str = "finbert"
 
 
 @dataclass(frozen=True)
@@ -193,24 +197,25 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
             api_key=_get_str("FINNHUB_API_KEY", required=True),
         ),
         risk=RiskConfig(
-            max_position_pct=_get_float("MAX_POSITION_PCT", 0.10),
-            max_daily_loss_pct=_get_float("MAX_DAILY_LOSS_PCT", 0.03),
+            max_position_pct=_get_float("MAX_POSITION_PCT", 1.0),
+            max_daily_loss_pct=_get_float("MAX_DAILY_LOSS_PCT", 0.05),
             max_trades_per_day=_get_int("MAX_TRADES_PER_DAY", 10),
             atr_stop_multiplier=_get_float("ATR_STOP_MULTIPLIER", 2.0),
             atr_take_profit_multiplier=_get_float("ATR_TAKE_PROFIT_MULTIPLIER", 3.0),
-            flip_confidence_threshold=_get_float("FLIP_CONFIDENCE_THRESHOLD", 0.0),
+            flip_confidence_threshold=_get_float("FLIP_CONFIDENCE_THRESHOLD", 0.3),
             trailing_stop=_get_bool("TRAILING_STOP", False),
         ),
         strategy=StrategyConfig(
-            technical_weight=_get_float("TECHNICAL_WEIGHT", 0.7),
-            sentiment_weight=_get_float("SENTIMENT_WEIGHT", 0.3),
-            entry_threshold=_get_float("ENTRY_THRESHOLD", 0.08),
+            technical_weight=_get_float("TECHNICAL_WEIGHT", 0.6),
+            sentiment_weight=_get_float("SENTIMENT_WEIGHT", 0.4),
+            entry_threshold=_get_float("ENTRY_THRESHOLD", 0.2),
+            sentiment_method=_get_str("SENTIMENT_METHOD", "vader").lower(),
         ),
         engine=EngineConfig(
-            poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
+            poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 1),
             close_at_eod=_get_bool("CLOSE_AT_EOD", True),
             use_options=_get_bool("USE_OPTIONS", False),
-            eod_flat_buffer_minutes=_get_int("EOD_FLAT_BUFFER_MINUTES", 15),
+            eod_flat_buffer_minutes=_get_int("EOD_FLAT_BUFFER_MINUTES", 5),
         ),
         monitoring=MonitoringConfig(
             alerts_enabled=_get_bool("ALERTS_ENABLED", True),
@@ -237,6 +242,11 @@ def _validate(settings: Settings) -> None:
         raise ValueError(
             "TECHNICAL_WEIGHT + SENTIMENT_WEIGHT must sum to 1.0, "
             f"got {weight_sum:.3f}"
+        )
+    if settings.strategy.sentiment_method not in ("finbert", "vader"):
+        raise ValueError(
+            "SENTIMENT_METHOD must be 'finbert' or 'vader', "
+            f"got {settings.strategy.sentiment_method!r}."
         )
     if not 0 < settings.risk.max_position_pct <= 1:
         raise ValueError("MAX_POSITION_PCT must be in (0, 1].")

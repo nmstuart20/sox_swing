@@ -42,10 +42,12 @@ class BacktestFinnhub:
         self,
         news: dict[str, pd.DataFrame],
         sector_symbols: tuple[str, ...] = (),
+        sentiment_method: str = "finbert",
     ) -> None:
+        self._method = sentiment_method
         # Source of the per-article scores; flips to "vader" if any frame had
         # to fall back during _prepare (see score_news_texts).
-        self._source = "finbert"
+        self._source = "vader" if sentiment_method == "vader" else "finbert"
         self._news = {sym: self._prepare(df) for sym, df in news.items()}
         self._sector = tuple(sector_symbols)
         self._now: datetime | None = None
@@ -96,7 +98,7 @@ class BacktestFinnhub:
             headline = out.get("headline", "").fillna("") if "headline" in out else ""
             summary = out.get("summary", "").fillna("") if "summary" in out else ""
             text = (headline.astype(str) + ". " + summary.astype(str)) if len(out) else []
-            out["sentiment"], source = score_news_texts(list(text))
+            out["sentiment"], source = score_news_texts(list(text), method=self._method)
             if source == "vader":
                 self._source = "vader"
         return out.sort_values("timestamp", ignore_index=True)
